@@ -14,8 +14,8 @@
 
 #include <render/shader.h>
 
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb/stb_image.h>
+// #define STB_IMAGE_IMPLEMENTATION
+// #include <stb/stb_image.h>
 
 #include <vector>
 #include <iostream>
@@ -656,9 +656,11 @@ int main(void)
 	glEnable(GL_CULL_FACE);
 
 	// create skybox
-
     Skybox skybox;
     skybox.initialize(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(600.0f, 600.0f, 600.0f));
+
+	Model sun;
+	sun.initialize("../final/model/sun/sun.gltf"); 
     // ---------------------------
 
 	// Camera setup, set eye location 
@@ -674,15 +676,48 @@ int main(void)
     
 	projectionMatrix = glm::perspective(glm::radians(FoV), 4.0f / 3.0f, zNear, zFar);
 
+	// Time and frame rate tracking
+	static double lastTime = glfwGetTime();
+	float time = 0.0f;			// Animation time 
+	float fTime = 0.0f;			// Time for measuring fps
+	unsigned long frames = 0;
 	do
 	{
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+		// Update states for animation
+        double currentTime = glfwGetTime();
+        float deltaTime = float(currentTime - lastTime);
+		lastTime = currentTime;
 
 		viewMatrix = glm::lookAt(eye_center, lookat, up);
 		glm::mat4 vp = projectionMatrix * viewMatrix;
 
 		// Render the skybox
 		skybox.render(vp);
+
+		//render sun
+		sun.render(vp);
+
+		// Update camera
+		// viewAzimuth += 0.1f * deltaTime;
+		// if (viewAzimuth > 2 * M_PI) viewAzimuth -= 2 * M_PI;
+		// eye_center.x = viewDistance * cos(viewAzimuth);
+		// eye_center.z = viewDistance * sin(viewAzimuth);
+
+		// FPS tracking 
+		// Count number of frames over a few seconds and take average
+		frames++;
+		fTime += deltaTime;
+		if (fTime > 2.0f) {		
+			float fps = frames / fTime;
+			frames = 0;
+			fTime = 0;
+			
+			std::stringstream stream;
+			stream << std::fixed << std::setprecision(2) << "Frames per second (FPS): " << fps;
+			glfwSetWindowTitle(window, stream.str().c_str());
+		}
 
 		// Swap buffers
 		glfwSwapBuffers(window);
@@ -693,6 +728,7 @@ int main(void)
 
 	// Clean up
 	skybox.cleanup();
+	sun.cleanup();
 
 	// Close OpenGL window and terminate GLFW
 	glfwTerminate();
