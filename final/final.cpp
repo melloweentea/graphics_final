@@ -34,8 +34,8 @@ static glm::vec3 eye_center;
 static glm::vec3 lookat(0, 0, 0);
 static glm::vec3 up(0, 1, 0);
 static float FoV = 45.0f;
-static float zNear = 1.0f;
-static float zFar = 100.0f; 
+static float zNear = 0.1f;
+static float zFar = 5000.0f; 
 // skybox params
 // glm::float32 FoV = 45;
 // glm::float32 zNear = 0.1f; 
@@ -44,7 +44,8 @@ static float zFar = 100.0f;
 // View control 
 static float viewAzimuth = 0.f;
 static float viewPolar = 0.f;
-static float viewDistance = 300.0f;
+// static float viewDistance = 300.0f;
+static float viewDistance = 100.0f;
 
 // 3d Model loading
 struct Model {
@@ -54,10 +55,16 @@ struct Model {
 
 	tinygltf::Model model;
 
+	//for position and rotation in render function 
+	glm::vec3 position = glm::vec3(0.0f);
+    glm::vec3 rotation = glm::vec3(0.0f); // Euler angles
+    float scale = 1.0f;
+
 	// Each VAO corresponds to each mesh primitive in the GLTF model
 	struct PrimitiveObject {
 		GLuint vao;
 		std::map<int, GLuint> vbos;
+		GLuint textureID; // Add this to store the texture handle
 	};
 	std::vector<PrimitiveObject> primitiveObjects;
 
@@ -86,7 +93,6 @@ struct Model {
 	void initialize(const char* path) {
 		// Modify your path if needed
 
-		//for the tree model 
 		if (!loadModel(model, path)) {
 			return;
 		}
@@ -136,6 +142,8 @@ struct Model {
 			tinygltf::Primitive primitive = mesh.primitives[i];
 			tinygltf::Accessor indexAccessor = model.accessors[primitive.indices];
 
+			PrimitiveObject primitiveObject;
+
 			GLuint vao;
 			glGenVertexArrays(1, &vao);
 			glBindVertexArray(vao);
@@ -168,57 +176,65 @@ struct Model {
 				}
 			}
 
-			// Texture mapping
-			if (model.textures.size() > 0) {
-				// FIXME: Use material's baseColor
-				tinygltf::Texture &tex = model.textures[0];
+			// 1. Get the material index from the current primitive (assuming you are in a loop)
+			int matIndex = primitive.material; 
 
-				if (tex.source > -1) {
-					// Load image from file
-					tinygltf::Image &image = model.images[tex.source];
+			// Only proceed if the primitive actually has a material assigned
+			if (matIndex != -1) {
+				tinygltf::Material &material = model.materials[matIndex];
+				
+				// 2. Access the baseColorTexture index from the PBR properties
+				int texIndex = material.pbrMetallicRoughness.baseColorTexture.index;
 
-					GLuint texid;
-					glGenTextures(1, &texid);
-					glBindTexture(GL_TEXTURE_2D, texid);
+				// 3. Check if the texture exists
+				if (texIndex > -1) {
+					tinygltf::Texture &tex = model.textures[texIndex];
 
-					glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-					//glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-					glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+					if (tex.source > -1) {
+						tinygltf::Image &image = model.images[tex.source];
 
-					GLenum format = GL_RGBA;
-					if (image.component == 1) {
-						format = GL_RED;
-					} else if (image.component == 2) {
-						format = GL_RG;
-					} else if (image.component == 3) {
-						format = GL_RGB;
-					} else {
-						// Unsupported format
+						GLuint texid;
+						glGenTextures(1, &texid);
+						glBindTexture(GL_TEXTURE_2D, texid);
+
+						primitiveObject.textureID = texid;
+
+						glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+						// 4. Use Sampler settings from the file instead of hardcoded REPEAT
+						if (tex.sampler != -1) {
+							tinygltf::Sampler &sampler = model.samplers[tex.sampler];
+							glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, sampler.minFilter != -1 ? sampler.minFilter : GL_LINEAR);
+							glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, sampler.magFilter != -1 ? sampler.magFilter : GL_LINEAR);
+							glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, sampler.wrapS);
+							glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, sampler.wrapT);
+						} else {
+							// Default fallback
+							glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+							glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+							glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+							glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+						}
+
+						GLenum format = GL_RGBA;
+						if (image.component == 1) format = GL_RED;
+						else if (image.component == 2) format = GL_RG;
+						else if (image.component == 3) format = GL_RGB;
+
+						GLenum type = GL_UNSIGNED_BYTE;
+						if (image.bits == 16) type = GL_UNSIGNED_SHORT;
+
+						// 5. Use GL_SRGB8_ALPHA8 for baseColor so colors aren't washed out
+						glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8, image.width, image.height, 0, format, type, &image.image.at(0));
+
+						glGenerateMipmap(GL_TEXTURE_2D);
+						// Re-enable mipmap filtering if you generated them
+						glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
 					}
-
-					GLenum type = GL_UNSIGNED_BYTE;
-					if (image.bits == 8) {
-						// As is GL_UNSIGNED_BYTE
-					} else if (image.bits == 16) {
-						type = GL_UNSIGNED_SHORT;
-					} else {
-						// Unsupported type
-					}
-
-					// Load image to OpenGL texture buffer
-					glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image.width, image.height, 0, format, type, &image.image.at(0));
-
-					// Mipmapping 
-					//glGenerateMipmap(GL_TEXTURE_2D);
-
 				}
 			}
 
 			// Record VAO for later use
-			PrimitiveObject primitiveObject;
 			primitiveObject.vao = vao;
 			primitiveObject.vbos = vbos;
 			primitiveObjects.push_back(primitiveObject);
@@ -269,6 +285,12 @@ struct Model {
 
 			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vbos.at(indexAccessor.bufferView));
 
+			// NEW: Bind the model's texture
+			glActiveTexture(GL_TEXTURE0); 
+			glBindTexture(GL_TEXTURE_2D, primitiveObjects[i].textureID);
+			// Ensure your model shader's sampler is pointed to unit 0
+			glUniform1i(glGetUniformLocation(programID, "u_BaseColorTexture"), 0);
+
 			glDrawElements(primitive.mode, indexAccessor.count,
 						indexAccessor.componentType,
 						BUFFER_OFFSET(indexAccessor.byteOffset));
@@ -299,8 +321,16 @@ struct Model {
 	void render(glm::mat4 cameraMatrix) {
 		glUseProgram(programID);
 		
+		//model transforms 
+		glm::mat4 modelMat = glm::mat4(1.0f);
+        modelMat = glm::translate(modelMat, position);
+        modelMat = glm::rotate(modelMat, rotation.x, glm::vec3(1,0,0));
+        modelMat = glm::rotate(modelMat, rotation.y, glm::vec3(0,1,0));
+        modelMat = glm::rotate(modelMat, rotation.z, glm::vec3(0,0,1));
+        modelMat = glm::scale(modelMat, glm::vec3(scale));
+
 		// Set camera
-		glm::mat4 mvp = cameraMatrix;
+		glm::mat4 mvp = cameraMatrix * modelMat;
 		glUniformMatrix4fv(mvpMatrixID, 1, GL_FALSE, &mvp[0][0]);
 
 		// Draw the GLTF model
@@ -557,6 +587,8 @@ struct Skybox {
 	void render(glm::mat4 cameraMatrix) {
 		glUseProgram(programID);
 
+		glDepthMask(GL_FALSE);
+
 		glEnableVertexAttribArray(0);
 		glBindBuffer(GL_ARRAY_BUFFER, vertexBufferID);
 		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
@@ -596,6 +628,8 @@ struct Skybox {
 			GL_UNSIGNED_INT,   // type
 			(void*)0           // element array buffer offset
 		);
+
+		glDepthMask(GL_TRUE);
 
 		glDisableVertexAttribArray(0);
 		glDisableVertexAttribArray(1);
@@ -661,16 +695,30 @@ int main(void)
 
 	Model sun;
 	sun.initialize("../final/model/sun/sun.gltf"); 
+	sun.scale = 5.0f;
+
+	Model palm; 
+	palm.initialize("../final/model/palm_tree/palm_tree.gltf");
+	palm.scale = 5.0f;
+
+	Model pillar;
+	pillar.initialize("../final/model/marble_pillar/scene.gltf");
+	pillar.rotation.x = glm::radians(90.0f);
+	pillar.scale = 0.5f;
+
+	Model bust;
+	bust.initialize("../final/model/helios_vaporwave_bust/scene.gltf");
+	bust.rotation.x = -glm::radians(90.0f);
     // ---------------------------
 
 	// Camera setup, set eye location 
-    // eye_center.y = viewDistance * cos(viewPolar);
-    // eye_center.x = viewDistance * cos(viewAzimuth);
-    // eye_center.z = viewDistance * sin(viewAzimuth);
+    eye_center.y = viewDistance * cos(viewPolar);
+    eye_center.x = viewDistance * cos(viewAzimuth);
+    eye_center.z = viewDistance * sin(viewAzimuth);
 
-    eye_center.y = 0.0f;
-    eye_center.x = 0.0f;
-    eye_center.z = 0.0f;
+    // eye_center.y = 0.0f;
+    // eye_center.x = 0.0f;
+    // eye_center.z = 0.0f;
 
 	glm::mat4 viewMatrix, projectionMatrix;
     
@@ -696,8 +744,11 @@ int main(void)
 		// Render the skybox
 		skybox.render(vp);
 
-		//render sun
+		//render models
 		sun.render(vp);
+		palm.render(vp);
+		pillar.render(vp);
+		bust.render(vp);
 
 		// Update camera
 		// viewAzimuth += 0.1f * deltaTime;
@@ -729,6 +780,9 @@ int main(void)
 	// Clean up
 	skybox.cleanup();
 	sun.cleanup();
+	palm.cleanup();
+	pillar.cleanup();
+	bust.cleanup();
 
 	// Close OpenGL window and terminate GLFW
 	glfwTerminate();
