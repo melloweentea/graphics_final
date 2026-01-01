@@ -14,8 +14,8 @@
 
 #include <render/shader.h>
 
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb/stb_image.h>
+// #define STB_IMAGE_IMPLEMENTATION
+// #include <stb/stb_image.h>
 
 #include <vector>
 #include <iostream>
@@ -34,8 +34,8 @@ static glm::vec3 eye_center;
 static glm::vec3 lookat(0, 0, 0);
 static glm::vec3 up(0, 1, 0);
 static float FoV = 45.0f;
-static float zNear = 1.0f;
-static float zFar = 100.0f; 
+static float zNear = 0.1f;
+static float zFar = 5000.0f; 
 // skybox params
 // glm::float32 FoV = 45;
 // glm::float32 zNear = 0.1f; 
