@@ -1,0 +1,7 @@
+C:/Users/Pam/Desktop/code/uni/graphics/final/build/CMakeFiles/final.dir
+C:/Users/Pam/Desktop/code/uni/graphics/final/build/CMakeFiles/ALL_BUILD.dir
+C:/Users/Pam/Desktop/code/uni/graphics/final/build/CMakeFiles/ZERO_CHECK.dir
+C:/Users/Pam/Desktop/code/uni/graphics/final/build/external/glad-3.3/CMakeFiles/glad.dir
+C:/Users/Pam/Desktop/code/uni/graphics/final/build/external/glad-3.3/CMakeFiles/ALL_BUILD.dir
+C:/Users/Pam/Desktop/code/uni/graphics/final/build/external/glfw-3.1.2/CMakeFiles/ALL_BUILD.dir
+C:/Users/Pam/Desktop/code/uni/graphics/final/build/external/glfw-3.1.2/src/CMakeFiles/glfw.dir

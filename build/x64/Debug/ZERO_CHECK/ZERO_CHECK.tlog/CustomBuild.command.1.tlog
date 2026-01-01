@@ -1,0 +1,10 @@
+^C:\USERS\PAM\DESKTOP\CODE\UNI\GRAPHICS\FINAL\BUILD\CMAKEFILES\562E8B7DD627D00DE4BFA2E1630911EC\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/Pam/Desktop/code/uni/graphics/final -BC:/Users/Pam/Desktop/code/uni/graphics/final/build --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file C:/Users/Pam/Desktop/code/uni/graphics/final/build/final.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

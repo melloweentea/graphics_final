@@ -1,0 +1,10 @@
+^C:\USERS\PAM\DESKTOP\CODE\UNI\GRAPHICS\FINAL\EXTERNAL\GLAD-3.3\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/Pam/Desktop/code/uni/graphics/final -BC:/Users/Pam/Desktop/code/uni/graphics/final/build --check-stamp-file C:/Users/Pam/Desktop/code/uni/graphics/final/build/external/glad-3.3/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

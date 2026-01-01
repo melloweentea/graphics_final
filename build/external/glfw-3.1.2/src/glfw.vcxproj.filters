@@ -1,0 +1,78 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="C:\Users\Pam\Desktop\code\uni\graphics\final\external\glfw-3.1.2\src\context.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\Pam\Desktop\code\uni\graphics\final\external\glfw-3.1.2\src\init.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\Pam\Desktop\code\uni\graphics\final\external\glfw-3.1.2\src\input.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\Pam\Desktop\code\uni\graphics\final\external\glfw-3.1.2\src\monitor.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\Pam\Desktop\code\uni\graphics\final\external\glfw-3.1.2\src\window.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\Pam\Desktop\code\uni\graphics\final\external\glfw-3.1.2\src\win32_init.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\Pam\Desktop\code\uni\graphics\final\external\glfw-3.1.2\src\win32_monitor.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\Pam\Desktop\code\uni\graphics\final\external\glfw-3.1.2\src\win32_time.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\Pam\Desktop\code\uni\graphics\final\external\glfw-3.1.2\src\win32_tls.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\Pam\Desktop\code\uni\graphics\final\external\glfw-3.1.2\src\win32_window.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\Pam\Desktop\code\uni\graphics\final\external\glfw-3.1.2\src\winmm_joystick.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\Pam\Desktop\code\uni\graphics\final\external\glfw-3.1.2\src\wgl_context.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="C:\Users\Pam\Desktop\code\uni\graphics\final\external\glfw-3.1.2\src\internal.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\Pam\Desktop\code\uni\graphics\final\build\external\glfw-3.1.2\src\glfw_config.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\Pam\Desktop\code\uni\graphics\final\external\glfw-3.1.2\include\GLFW\glfw3.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\Pam\Desktop\code\uni\graphics\final\external\glfw-3.1.2\include\GLFW\glfw3native.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\Pam\Desktop\code\uni\graphics\final\external\glfw-3.1.2\src\win32_platform.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\Pam\Desktop\code\uni\graphics\final\external\glfw-3.1.2\src\win32_tls.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\Pam\Desktop\code\uni\graphics\final\external\glfw-3.1.2\src\winmm_joystick.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\Pam\Desktop\code\uni\graphics\final\external\glfw-3.1.2\src\wgl_context.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\Pam\Desktop\code\uni\graphics\final\external\glfw-3.1.2\src\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{981E207B-72C5-3E6F-A8C2-497A0A00ACC6}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{E6892CEE-3DEA-360C-847F-783620D7E198}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>
