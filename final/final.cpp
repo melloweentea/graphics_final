@@ -399,16 +399,22 @@ struct Floor {
         glGenBuffers(1, &vertexBufferID);
         glBindBuffer(GL_ARRAY_BUFFER, vertexBufferID);
         glBufferData(GL_ARRAY_BUFFER, sizeof(vertex_buffer_data), vertex_buffer_data, GL_STATIC_DRAW);
+		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0); // <--- ADD THIS
+    	glEnableVertexAttribArray(0);
 
         // Color Buffer
         glGenBuffers(1, &colorBufferID);
         glBindBuffer(GL_ARRAY_BUFFER, colorBufferID);
         glBufferData(GL_ARRAY_BUFFER, sizeof(color_buffer_data), color_buffer_data, GL_STATIC_DRAW);
-
-        // UV Buffer
+		glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, (void*)0); // <--- ADD THIS
+    	glEnableVertexAttribArray(1);
+        
+		// UV Buffer
         glGenBuffers(1, &uvBufferID);
         glBindBuffer(GL_ARRAY_BUFFER, uvBufferID);
         glBufferData(GL_ARRAY_BUFFER, sizeof(uv_buffer_data), uv_buffer_data, GL_STATIC_DRAW);
+		glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 0, (void*)0); // <--- ADD THIS
+    	glEnableVertexAttribArray(2);
 
         // Index Buffer
         glGenBuffers(1, &indexBufferID);
@@ -427,10 +433,13 @@ struct Floor {
         gridColorID  = glGetUniformLocation(programID, "gridColor");
         floorColorID = glGetUniformLocation(programID, "floorColor");
         gridScaleID  = glGetUniformLocation(programID, "gridScale");
+
+		glBindVertexArray(0); // Unbind VAO to stay clean
     }
 
     void render(glm::mat4 cameraMatrix, glm::vec3 gColor, glm::vec3 fColor, float gScale) {
         glUseProgram(programID);
+		glBindVertexArray(vertexArrayID);
 
         // 1. Send Vertex Data
         glEnableVertexAttribArray(0);
@@ -463,6 +472,8 @@ struct Floor {
 
         // Draw the floor
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, (void*)0);
+
+		glBindVertexArray(0);
 
         glDisableVertexAttribArray(0);
         glDisableVertexAttribArray(1);
@@ -527,7 +538,7 @@ int main(void)
 	sun.position.z = -100.0f;
 
 	Floor floor; 
-	floor.initialize(glm::vec3(0, -25, 0), glm::vec3(100, 1, 100));
+	floor.initialize(glm::vec3(0, -25, 0), glm::vec3(300, 1, 300));
 
 	// Initialize random engine
 	std::random_device rd;
@@ -606,7 +617,11 @@ int main(void)
 
 		//render models and floor
 		sun.render(vp);
-		floor.render(vp, glm::vec3(0.0f, 1.0f, 1.0f), glm::vec3(0.0f, 0.0f, 0.0f), 50.0f);
+
+		glDisable(GL_CULL_FACE);
+		floor.render(vp, glm::vec3(1.0f, 0.0f, 1.0f), glm::vec3(0.16f, 0.13f, 0.16f), 30.0f);
+		glEnable(GL_CULL_FACE);
+
 		for(auto& palm : palms) {
 			palm.render(vp);
 		}
