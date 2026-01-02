@@ -17,6 +17,7 @@
 // #define STB_IMAGE_IMPLEMENTATION
 // #include <stb/stb_image.h>
 
+#include <random>
 #include <vector>
 #include <iostream>
 #include <iomanip>
@@ -30,9 +31,13 @@ static GLFWwindow *window;
 static void key_callback(GLFWwindow *window, int key, int scancode, int action, int mode);
 
 // OpenGL camera view parameters
-static glm::vec3 eye_center;
+static glm::vec3 eye_center(-2.91998, -2.91998, 99.9574);
 static glm::vec3 lookat(0, 0, 0);
 static glm::vec3 up(0, 1, 0);
+static glm::vec3 forward = glm::normalize(lookat - eye_center);
+
+static float cameraSpeed = 1.0f;
+
 static float FoV = 45.0f;
 static float zNear = 0.1f;
 static float zFar = 5000.0f; 
@@ -695,30 +700,61 @@ int main(void)
 
 	Model sun;
 	sun.initialize("../final/model/sun/sun.gltf"); 
-	sun.scale = 5.0f;
+	sun.scale = 10.0f;
+	sun.position.z = -100.0f;
 
-	Model palm; 
-	palm.initialize("../final/model/palm_tree/palm_tree.gltf");
-	palm.scale = 5.0f;
+	// Initialize random engine
+	std::random_device rd;
+	std::mt19937 gen(rd());
 
-	Model pillar;
-	pillar.initialize("../final/model/marble_pillar/scene.gltf");
-	pillar.rotation.x = glm::radians(90.0f);
-	pillar.scale = 0.5f;
+	// Define your total world bounds (e.g., -100 to 100)
+	std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
+
+	std::vector<Model> palms;
+	for (int i = 0; i < 30; i++) {
+		float xPos, zPos;
+		Model palm; 
+		palm.initialize("../final/model/palm_tree/palm_tree.gltf");
+		palm.position.y = -25.0f;
+		palm.scale = 2.0f;
+		// Logic for X (Excluding -30 to 30)
+		do { xPos = dist(gen); } while (xPos > -30.0f && xPos < 30.0f);
+		palm.position.x = xPos;
+
+		// Z can be completely random
+		zPos = dist(gen);
+		palm.position.z = zPos;
+
+		palms.push_back(palm);
+	}
+	
+	std::vector<Model> pillars;
+	for(int i = 0; i < 5; i++) {
+		Model pillarLeft;
+		pillarLeft.initialize("../final/model/marble_pillar/scene.gltf");
+		pillarLeft.rotation.x = glm::radians(90.0f);
+		pillarLeft.scale = 0.5f;
+		pillarLeft.position.y = -25.0f;
+		pillarLeft.position.z = -(float)i * 50.0f; 
+		
+		pillarLeft.position.x = -30.0f; // Left side
+		pillars.push_back(pillarLeft);
+
+		Model pillarRight = pillarLeft; 
+		pillarRight.position.x = 30.0f; 
+		pillars.push_back(pillarRight);
+	}
 
 	Model bust;
 	bust.initialize("../final/model/helios_vaporwave_bust/scene.gltf");
 	bust.rotation.x = -glm::radians(90.0f);
+	bust.scale = 0.5f;
     // ---------------------------
 
 	// Camera setup, set eye location 
-    eye_center.y = viewDistance * cos(viewPolar);
-    eye_center.x = viewDistance * cos(viewAzimuth);
-    eye_center.z = viewDistance * sin(viewAzimuth);
-
-    // eye_center.y = 0.0f;
-    // eye_center.x = 0.0f;
-    // eye_center.z = 0.0f;
+    // eye_center.y = viewDistance * cos(viewPolar);
+    // eye_center.x = viewDistance * cos(viewAzimuth);
+    // eye_center.z = viewDistance * sin(viewAzimuth);
 
 	glm::mat4 viewMatrix, projectionMatrix;
     
@@ -729,6 +765,7 @@ int main(void)
 	float time = 0.0f;			// Animation time 
 	float fTime = 0.0f;			// Time for measuring fps
 	unsigned long frames = 0;
+
 	do
 	{
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -746,8 +783,13 @@ int main(void)
 
 		//render models
 		sun.render(vp);
-		palm.render(vp);
-		pillar.render(vp);
+		for(auto& palm : palms) {
+			palm.render(vp);
+		}
+
+		for(auto& pillar : pillars) {
+			pillar.render(vp);
+		}
 		bust.render(vp);
 
 		// Update camera
@@ -780,8 +822,12 @@ int main(void)
 	// Clean up
 	skybox.cleanup();
 	sun.cleanup();
-	palm.cleanup();
-	pillar.cleanup();
+	for(auto& palm : palms) {
+		palm.cleanup();
+	}
+	for(auto& pillar : pillars) {
+		pillar.cleanup();
+	}
 	bust.cleanup();
 
 	// Close OpenGL window and terminate GLFW
@@ -797,36 +843,60 @@ void key_callback(GLFWwindow *window, int key, int scancode, int action, int mod
 	{
 		viewAzimuth = 0.f;
 		viewPolar = 0.f;
-		eye_center.y = viewDistance * cos(viewPolar);
-		eye_center.x = viewDistance * cos(viewAzimuth);
-		eye_center.z = viewDistance * sin(viewAzimuth);
+		eye_center = glm::vec3(-2.91998, -2.91998, 99.9574);
 		std::cout << "Reset." << std::endl;
 	}
 
+	// Sensitivity constants
+	const float angleStep = 0.05f; 
+	const float PI = 3.1415926535f;
+
 	if (key == GLFW_KEY_UP && (action == GLFW_REPEAT || action == GLFW_PRESS))
 	{
-		viewPolar -= 0.1f;
-		eye_center.y = viewDistance * cos(viewPolar);
+		viewPolar -= angleStep;
+		// Clamp to avoid flipping at the very top (0 degrees)
+		if (viewPolar < 0.01f) viewPolar = 0.01f;
 	}
 
 	if (key == GLFW_KEY_DOWN && (action == GLFW_REPEAT || action == GLFW_PRESS))
 	{
-		viewPolar += 0.1f;
-		eye_center.y = viewDistance * cos(viewPolar);
+		viewPolar += angleStep;
+		// Clamp to avoid flipping at the very bottom (180 degrees)
+		if (viewPolar > PI - 0.01f) viewPolar = PI - 0.01f;
 	}
 
 	if (key == GLFW_KEY_LEFT && (action == GLFW_REPEAT || action == GLFW_PRESS))
 	{
-		viewAzimuth -= 0.1f;
-		eye_center.x = viewDistance * cos(viewAzimuth);
-		eye_center.z = viewDistance * sin(viewAzimuth);
+		viewAzimuth -= angleStep;
 	}
 
 	if (key == GLFW_KEY_RIGHT && (action == GLFW_REPEAT || action == GLFW_PRESS))
 	{
-		viewAzimuth += 0.1f;
-		eye_center.x = viewDistance * cos(viewAzimuth);
-		eye_center.z = viewDistance * sin(viewAzimuth);
+		viewAzimuth += angleStep;
+	}
+
+	eye_center.x = lookat.x + viewDistance * sin(viewPolar) * cos(viewAzimuth);
+	eye_center.y = lookat.y + viewDistance * cos(viewPolar);
+	eye_center.z = lookat.z + viewDistance * sin(viewPolar) * sin(viewAzimuth);
+
+	// For moving forward and backwards 
+	if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
+		eye_center += forward * cameraSpeed;
+		lookat     += forward * cameraSpeed; // Move the target with the eye
+	}
+
+	if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
+		eye_center -= forward * cameraSpeed;
+		lookat     -= forward * cameraSpeed; // Move the target with the eye
+	}
+
+	//check camera params
+	if (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS) {
+		std::cout << "--- Camera Debug ---" << std::endl;
+		std::cout << "eye_center: " << eye_center.x << ", " << eye_center.y << ", " << eye_center.z << std::endl;
+		std::cout << "lookat:     " << lookat.x << ", " << lookat.y << ", " << lookat.z << std::endl;
+		std::cout << "up:         " << up.x << ", " << up.y << ", " << up.z << std::endl;
+		std::cout << "--------------------" << std::endl;
 	}
 
 	if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
