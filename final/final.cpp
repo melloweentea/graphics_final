@@ -347,310 +347,137 @@ struct Model {
 	}
 }; 
 
-static GLuint LoadTextureSkybox(const char *texture_file_path) {
-    int w, h, channels;
-    uint8_t* img = stbi_load(texture_file_path, &w, &h, &channels, 3);
-    GLuint texture;
-	// Generate an OpenGL texture ID and make use of it 
-    glGenTextures(1, &texture);  
-    glBindTexture(GL_TEXTURE_2D, texture);  
+// floor grid 
+struct Floor {
+    glm::vec3 position;
+    glm::vec3 scale;
 
-    // To tile textures on a box, we set wrapping to repeat
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);	
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    // 4 Vertices for a flat plane on the XZ axis
+    GLfloat vertex_buffer_data[12] = {
+        -1.0f, 0.0f,  1.0f,  // Front Left
+         1.0f, 0.0f,  1.0f,  // Front Right
+         1.0f, 0.0f, -1.0f,  // Back Right
+        -1.0f, 0.0f, -1.0f   // Back Left
+    };
 
-    // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR); //apparently changing to GL nearest removes the seams
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    // Simple white color buffer (color logic is mostly handled in the shader)
+    GLfloat color_buffer_data[12] = {
+        1.0f, 1.0f, 1.0f,
+        1.0f, 1.0f, 1.0f,
+        1.0f, 1.0f, 1.0f,
+        1.0f, 1.0f, 1.0f
+    };
 
-    if (img) {
-		// Load the image into the current OpenGL texture 
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, w, h, 0, GL_RGB, GL_UNSIGNED_BYTE, img);
-        glGenerateMipmap(GL_TEXTURE_2D);
-    } else {
-        std::cout << "Failed to load texture " << texture_file_path << std::endl;
-    }
-    stbi_image_free(img);
+    // UVs from 0 to 1 across the whole plane
+    GLfloat uv_buffer_data[8] = {
+        0.0f, 0.0f,
+        1.0f, 0.0f,
+        1.0f, 1.0f,
+        0.0f, 1.0f
+    };
 
-    return texture;
-}
+    GLuint index_buffer_data[6] = {
+        0, 1, 2,
+        0, 2, 3
+    };
 
-// skybox 
-struct Skybox {
-	glm::vec3 position;		// Position of the box 
-	glm::vec3 scale;		// Size of the box in each axis
-	
-	GLfloat vertex_buffer_data[72] = {	// Vertex definition for a canonical box
-		// Front face x+
-		-1.0f, -1.0f, 1.0f, 
-		1.0f, -1.0f, 1.0f, 
-		1.0f, 1.0f, 1.0f, 
-		-1.0f, 1.0f, 1.0f, 
-		
-		// Back face x-
-		1.0f, -1.0f, -1.0f, 
-		-1.0f, -1.0f, -1.0f, 
-		-1.0f, 1.0f, -1.0f, 
-		1.0f, 1.0f, -1.0f,
-		
-		// Left face z-
-		-1.0f, -1.0f, -1.0f, 
-		-1.0f, -1.0f, 1.0f, 
-		-1.0f, 1.0f, 1.0f, 
-		-1.0f, 1.0f, -1.0f, 
-
-		// Right face z+
-		1.0f, -1.0f, 1.0f, 
-		1.0f, -1.0f, -1.0f, 
-		1.0f, 1.0f, -1.0f, 
-		1.0f, 1.0f, 1.0f,
-
-		// Top face y+
-		-1.0f, 1.0f, 1.0f, 
-		1.0f, 1.0f, 1.0f, 
-		1.0f, 1.0f, -1.0f, 
-		-1.0f, 1.0f, -1.0f, 
-
-		// Bottom face y-
-		-1.0f, -1.0f, -1.0f, 
-		1.0f, -1.0f, -1.0f, 
-		1.0f, -1.0f, 1.0f, 
-		-1.0f, -1.0f, 1.0f, 
-	};
-
-	GLfloat color_buffer_data[72] = {
-		// Front, red
-		1.0f, 0.0f, 0.0f,
-		1.0f, 0.0f, 0.0f,
-		1.0f, 0.0f, 0.0f,
-		1.0f, 0.0f, 0.0f,
-
-		// Back, yellow
-		1.0f, 1.0f, 0.0f,
-		1.0f, 1.0f, 0.0f,
-		1.0f, 1.0f, 0.0f,
-		1.0f, 1.0f, 0.0f,
-
-		// Left, green
-		0.0f, 1.0f, 0.0f, 
-		0.0f, 1.0f, 0.0f,
-		0.0f, 1.0f, 0.0f,
-		0.0f, 1.0f, 0.0f,
-
-		// Right, cyan
-		0.0f, 1.0f, 1.0f, 
-		0.0f, 1.0f, 1.0f, 
-		0.0f, 1.0f, 1.0f, 
-		0.0f, 1.0f, 1.0f, 
-
-		// Top, blue
-		0.0f, 0.0f, 1.0f, 
-		0.0f, 0.0f, 1.0f,
-		0.0f, 0.0f, 1.0f,
-		0.0f, 0.0f, 1.0f,
-
-		// Bottom, magenta
-		1.0f, 0.0f, 1.0f,
-		1.0f, 0.0f, 1.0f, 
-		1.0f, 0.0f, 1.0f, 
-		1.0f, 0.0f, 1.0f,  
-	};
-
-    GLuint index_buffer_data[36] = {		// 12 triangle faces of a box
-		2, 1, 0, 	
-		3, 2, 0, 
-		
-		6, 5, 4, 
-		7, 6, 4, 
-
-		10, 9, 8, 
-		11, 10, 8, 
-
-		14, 13, 12, 
-		15, 14, 12, 
-
-		18, 17, 16, 
-		19, 18, 16, 
-
-		22, 21, 20, 
-		23, 22, 20, 
-	};
-
-    // TODO: Define UV buffer data
-    GLfloat uv_buffer_data[48] = {
-		// Front face x+
-        0.25f, 2.0f/3.0f,
-		0.0f, 2.0f/3.0f,
-        0.0f, 1.0f/3.0f,
-        0.25f, 1.0f/3.0f,
-		
-		// Back face x-
-        0.75f, 2.0f/3.0f,
-		0.5f, 2.0f/3.0f,
-        0.5f, 1.0f/3.0f,
-        0.75f, 1.0f/3.0f,
-		
-		// Left face z-
-        0.5f, 2.0f/3.0f,
-		0.25f, 2.0f/3.0f,
-        0.25f, 1.0f/3.0f,
-        0.5f, 1.0f/3.0f,
-		
-		// Right face z+
-        1.0f, 2.0f/3.0f,
-		0.75f, 2.0f/3.0f,
-        0.75f, 1.0f/3.0f,
-        1.0f, 1.0f/3.0f,
-		
-		// Top face y-
-        0.25f, 1.0f/3.0f,
-        0.25f, 0.0f,
-        0.5f, 0.0f,
-        0.5f, 1.0f/3.0f,
-       
-		// Bottom face y+
-        0.5f, 2.0f/3.0f,
-        0.5f, 1.0f,
-        0.25f, 1.0f,
-        0.25f, 2.0f/3.0f,
+    // OpenGL IDs
+    GLuint vertexArrayID, vertexBufferID, indexBufferID, colorBufferID, uvBufferID;
+    GLuint programID, mvpMatrixID;
     
-	}; 
+    // Grid-specific Uniform IDs
+    GLuint gridColorID, floorColorID, gridScaleID;
 
-	// OpenGL buffers
-	GLuint vertexArrayID; 
-	GLuint vertexBufferID; 
-	GLuint indexBufferID; 
-	GLuint colorBufferID;
-	GLuint uvBufferID;
-	GLuint textureID;
+    void initialize(glm::vec3 position, glm::vec3 scale) {
+        this->position = position;
+        this->scale = scale;
 
-	// Shader variable IDs
-	GLuint mvpMatrixID;
-	GLuint textureSamplerID;
-	GLuint programID;
+        glGenVertexArrays(1, &vertexArrayID);
+        glBindVertexArray(vertexArrayID);
 
-	void initialize(glm::vec3 position, glm::vec3 scale) {
-		// Define scale of the building geometry
-		this->position = position;
-		this->scale = scale;
+        // Position Buffer
+        glGenBuffers(1, &vertexBufferID);
+        glBindBuffer(GL_ARRAY_BUFFER, vertexBufferID);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertex_buffer_data), vertex_buffer_data, GL_STATIC_DRAW);
 
-		// Create a vertex array object
-		glGenVertexArrays(1, &vertexArrayID);
-		glBindVertexArray(vertexArrayID);
+        // Color Buffer
+        glGenBuffers(1, &colorBufferID);
+        glBindBuffer(GL_ARRAY_BUFFER, colorBufferID);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(color_buffer_data), color_buffer_data, GL_STATIC_DRAW);
 
-		// Create a vertex buffer object to store the vertex data		
-		glGenBuffers(1, &vertexBufferID);
-		glBindBuffer(GL_ARRAY_BUFFER, vertexBufferID);
-		glBufferData(GL_ARRAY_BUFFER, sizeof(vertex_buffer_data), vertex_buffer_data, GL_STATIC_DRAW);
+        // UV Buffer
+        glGenBuffers(1, &uvBufferID);
+        glBindBuffer(GL_ARRAY_BUFFER, uvBufferID);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(uv_buffer_data), uv_buffer_data, GL_STATIC_DRAW);
 
-		// Create a vertex buffer object to store the color data
-        // TODO: 
-		glGenBuffers(1, &colorBufferID);
-		glBindBuffer(GL_ARRAY_BUFFER, colorBufferID);
-		glBufferData(GL_ARRAY_BUFFER, sizeof(color_buffer_data), color_buffer_data, GL_STATIC_DRAW);
+        // Index Buffer
+        glGenBuffers(1, &indexBufferID);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBufferID);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(index_buffer_data), index_buffer_data, GL_STATIC_DRAW);
 
-		// for (int i=0; i<24; ++i) uv_buffer_data[2*i+1] *= scale.y / scale.x; //understand this later lol but i think this repeats the pattern 5 times?
-
-        // int texWidth, texHeight, texChannels;
-        // stbi_info("../lab2/studio_garden.png", &texWidth, &texHeight, &texChannels);
-        // float offsetX = 0.5f / texWidth;
-        // float offsetY = 0.5f / texHeight;
-
-        // updateUVs(uv_buffer_data, offsetX, offsetY);
-
-		// TODO: Create a vertex buffer object to store the UV data
-		glGenBuffers(1, &uvBufferID);
-		glBindBuffer(GL_ARRAY_BUFFER, uvBufferID);
-		glBufferData(GL_ARRAY_BUFFER, sizeof(uv_buffer_data), uv_buffer_data, GL_STATIC_DRAW);
-
-		// Create an index buffer object to store the index data that defines triangle faces
-		glGenBuffers(1, &indexBufferID);
-		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBufferID);
-		glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(index_buffer_data), index_buffer_data, GL_STATIC_DRAW);
-
-		// Create and compile our GLSL program from the shaders
-		programID = LoadShadersFromFile("../final/box.vert", "../final/box.frag");
+        // Load Shaders 
+        programID = LoadShadersFromFile("../final/floor.vert", "../final/floor.frag");
 		if (programID == 0)
 		{
 			std::cerr << "Failed to load shaders." << std::endl;
 		}
-
-		// Get a handle for our "MVP" uniform
-		mvpMatrixID = glGetUniformLocation(programID, "MVP");
-
-        // TODO: Load a texture 
-        // textureID = LoadTextureSkybox("../lab2/studio_garden_debug.png");
-        // textureID = LoadTextureSkybox("../lab2/studio_garden.png");
-        textureID = LoadTextureSkybox("../final/space2.png");
-
-        // TODO: Get a handle to texture sampler 
-        textureSamplerID = glGetUniformLocation(programID, "textureSampler");
-
-	}
-
-	void render(glm::mat4 cameraMatrix) {
-		glUseProgram(programID);
-
-		glDepthMask(GL_FALSE);
-
-		glEnableVertexAttribArray(0);
-		glBindBuffer(GL_ARRAY_BUFFER, vertexBufferID);
-		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
-
-		glEnableVertexAttribArray(1);
-		glBindBuffer(GL_ARRAY_BUFFER, colorBufferID);
-		glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, 0);
-
-		glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBufferID);
-
-		// TODO: Model transform 
-		// -----------------------
-        glm::mat4 modelMatrix = glm::mat4();
-		modelMatrix = glm::translate(modelMatrix, position);   
-		modelMatrix = glm::scale(modelMatrix, scale);
         
-        // -----------------------
+        // Get Uniform Handles
+        mvpMatrixID  = glGetUniformLocation(programID, "MVP");
+        gridColorID  = glGetUniformLocation(programID, "gridColor");
+        floorColorID = glGetUniformLocation(programID, "floorColor");
+        gridScaleID  = glGetUniformLocation(programID, "gridScale");
+    }
 
-		// Set model-view-projection matrix
-		glm::mat4 mvp = cameraMatrix * modelMatrix;
-		glUniformMatrix4fv(mvpMatrixID, 1, GL_FALSE, &mvp[0][0]);
+    void render(glm::mat4 cameraMatrix, glm::vec3 gColor, glm::vec3 fColor, float gScale) {
+        glUseProgram(programID);
 
-		// TODO: Enable UV buffer and texture sampler
-		glEnableVertexAttribArray(2);
-		glBindBuffer(GL_ARRAY_BUFFER, uvBufferID);
-		glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 0, 0);
+        // 1. Send Vertex Data
+        glEnableVertexAttribArray(0);
+        glBindBuffer(GL_ARRAY_BUFFER, vertexBufferID);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
 
-		// set textureSampler to use Texture Unit 0
-		glActiveTexture(GL_TEXTURE0);
-		glBindTexture(GL_TEXTURE_2D, textureID);
-		glUniform1i(textureSamplerID, 0);
+        // 2. Send Color Data
+        glEnableVertexAttribArray(1);
+        glBindBuffer(GL_ARRAY_BUFFER, colorBufferID);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, 0);
 
-		// Draw the box
-		glDrawElements(
-			GL_TRIANGLES,      // mode
-			36,    			   // number of indices
-			GL_UNSIGNED_INT,   // type
-			(void*)0           // element array buffer offset
-		);
+        // 3. Send UV Data
+        glEnableVertexAttribArray(2);
+        glBindBuffer(GL_ARRAY_BUFFER, uvBufferID);
+        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 0, 0);
 
-		glDepthMask(GL_TRUE);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBufferID);
 
-		glDisableVertexAttribArray(0);
-		glDisableVertexAttribArray(1);
-        //glDisableVertexAttribArray(2);
-	}
+        // 4. Transform Matrices
+        glm::mat4 modelMatrix = glm::mat4(1.0f);
+        modelMatrix = glm::translate(modelMatrix, position);
+        modelMatrix = glm::scale(modelMatrix, scale);
+        glm::mat4 mvp = cameraMatrix * modelMatrix;
+        glUniformMatrix4fv(mvpMatrixID, 1, GL_FALSE, &mvp[0][0]);
 
-	void cleanup() {
-		glDeleteBuffers(1, &vertexBufferID);
-		glDeleteBuffers(1, &colorBufferID);
-		glDeleteBuffers(1, &indexBufferID);
-		glDeleteVertexArrays(1, &vertexArrayID);
-		//glDeleteBuffers(1, &uvBufferID);
-		//glDeleteTextures(1, &textureID);
-		glDeleteProgram(programID);
-	}
-}; 
+        // 5. Update Grid Colors and Scale
+        glUniform3fv(gridColorID, 1, &gColor[0]);
+        glUniform3fv(floorColorID, 1, &fColor[0]);
+        glUniform1f(gridScaleID, gScale);
+
+        // Draw the floor
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, (void*)0);
+
+        glDisableVertexAttribArray(0);
+        glDisableVertexAttribArray(1);
+        glDisableVertexAttribArray(2);
+    }
+
+    void cleanup() {
+        glDeleteBuffers(1, &vertexBufferID);
+        glDeleteBuffers(1, &colorBufferID);
+        glDeleteBuffers(1, &uvBufferID);
+        glDeleteBuffers(1, &indexBufferID);
+        glDeleteVertexArrays(1, &vertexArrayID);
+        glDeleteProgram(programID);
+    }
+};
 
 int main(void)
 {
@@ -694,20 +521,19 @@ int main(void)
 	glEnable(GL_DEPTH_TEST);
 	glEnable(GL_CULL_FACE);
 
-	// create skybox
-    Skybox skybox;
-    skybox.initialize(glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(600.0f, 600.0f, 600.0f));
-
 	Model sun;
 	sun.initialize("../final/model/sun/sun.gltf"); 
 	sun.scale = 10.0f;
 	sun.position.z = -100.0f;
 
+	Floor floor; 
+	floor.initialize(glm::vec3(0, -25, 0), glm::vec3(100, 1, 100));
+
 	// Initialize random engine
 	std::random_device rd;
 	std::mt19937 gen(rd());
 
-	// Define your total world bounds (e.g., -100 to 100)
+	// Define world bounds for now (e.g., -100 to 100)
 	std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
 
 	std::vector<Model> palms;
@@ -778,11 +604,9 @@ int main(void)
 		viewMatrix = glm::lookAt(eye_center, lookat, up);
 		glm::mat4 vp = projectionMatrix * viewMatrix;
 
-		// Render the skybox
-		skybox.render(vp);
-
-		//render models
+		//render models and floor
 		sun.render(vp);
+		floor.render(vp, glm::vec3(0.0f, 1.0f, 1.0f), glm::vec3(0.0f, 0.0f, 0.0f), 50.0f);
 		for(auto& palm : palms) {
 			palm.render(vp);
 		}
@@ -819,9 +643,8 @@ int main(void)
 	} // Check if the ESC key was pressed or the window was closed
 	while (!glfwWindowShouldClose(window));
 
-	// Clean up
-	skybox.cleanup();
 	sun.cleanup();
+	floor.cleanup();
 	for(auto& palm : palms) {
 		palm.cleanup();
 	}
