@@ -28,6 +28,9 @@
 #define BUFFER_OFFSET(i) ((char *)NULL + (i))
 
 static GLFWwindow *window;
+static int windowWidth = 1024;
+static int windowHeight = 768;
+
 static void key_callback(GLFWwindow *window, int key, int scancode, int action, int mode);
 
 // OpenGL camera view parameters
@@ -60,11 +63,97 @@ static GLuint colorBuffer;
 static GLuint pingpongFBO[2];
 static GLuint pingpongColorbuffers[2];
 
+//lighting control 
+const glm::vec3 wave500(0.0f, 255.0f, 146.0f);
+const glm::vec3 wave600(255.0f, 190.0f, 0.0f);
+const glm::vec3 wave700(205.0f, 0.0f, 0.0f);
+static glm::vec3 lightIntensity = 5.0f * (8.0f * wave500 + 15.6f * wave600 + 18.4f * wave700);
+// static glm::vec3 lightPosition(5.36495f, 14.3552f, -212.269f);
+static glm::vec3 lightPosition(5.36495f, 54.3552f, -212.269f);
+// static glm::vec3 lightPosition(0.0f, 100.0f, 0.0f);
+static glm::vec3 lightLookAt(0.0f, 0.0f, 0.0f); 
+
+//shadow mapping 
+static glm::vec3 lightUp(0, 1, 0);
+static int shadowMapWidth = 1024;
+static int shadowMapHeight = 1024;
+static GLuint fbo;
+static GLuint depthTex;
+
+static float depthFoV = 90.0f;
+static float depthNear = 40.0f;
+static float depthFar = 750.0f; 
+
+static bool saveDepth = false;
+
+// shadow mapping 
+static void saveDepthTexture(GLuint fbo, std::string filename) {
+    int width = shadowMapWidth;
+    int height = shadowMapHeight;
+	if (shadowMapWidth == 0 || shadowMapHeight == 0) {
+		width = windowWidth;
+		height = windowHeight;
+	}
+    int channels = 3; 
+    
+    std::vector<float> depth(width * height);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glReadBuffer(GL_DEPTH_COMPONENT);
+    glReadPixels(0, 0, width, height, GL_DEPTH_COMPONENT, GL_FLOAT, depth.data());
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    std::vector<unsigned char> img(width * height * 3);
+    for (int i = 0; i < width * height; ++i) img[3*i] = img[3*i+1] = img[3*i+2] = depth[i] * 255;
+
+    stbi_write_png(filename.c_str(), width, height, channels, img.data(), width * channels);
+}
+
+// creating framebuffer object for shadow mapping
+static void initializeFBO(int width, int height) {
+	// creating framebuffer object
+	glGenFramebuffers(1, &fbo);
+	glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+	// creating depth texture
+	glGenTextures(1, &depthTex);
+	glBindTexture(GL_TEXTURE_2D, depthTex);
+	glTexImage2D(
+		GL_TEXTURE_2D,
+		0,
+		GL_DEPTH_COMPONENT,   // internal format
+		width, height,
+		0,
+		GL_DEPTH_COMPONENT,   // format
+		GL_FLOAT,             // type
+		NULL
+	);
+
+	//texture settings for depth texture
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+	// attaching depth texture to framebuffer object
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depthTex, 0);
+
+	glDrawBuffer(GL_NONE);
+	glReadBuffer(GL_NONE);	
+
+	if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    std::cout << "FBO not complete!" << std::endl;
+	}
+
+	//unbind 
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
 // 3d Model loading
 struct Model {
 	// Shader variable IDs
 	GLuint mvpMatrixID;
-	GLuint programID;
+	GLuint modelShader;
+	GLuint depthShader;
 
 	tinygltf::Model model;
 
@@ -114,14 +203,20 @@ struct Model {
 		primitiveObjects = bindModel(model);
 
 		// Create and compile our GLSL program from the shaders
-		programID = LoadShadersFromFile("../final/model.vert", "../final/model.frag");
-		if (programID == 0)
+		modelShader = LoadShadersFromFile("../final/model.vert", "../final/model.frag");
+		if (modelShader == 0)
+		{
+			std::cerr << "Failed to load shaders." << std::endl;
+		}
+
+		depthShader = LoadShadersFromFile("../final/depth.vert", "../final/depth.frag");
+		if (depthShader == 0)
 		{
 			std::cerr << "Failed to load shaders." << std::endl;
 		}
 
 		// Get a handle for GLSL variables
-		mvpMatrixID = glGetUniformLocation(programID, "MVP");
+		mvpMatrixID = glGetUniformLocation(modelShader, "MVP");
 	}
 
 	void bindMesh(std::vector<PrimitiveObject> &primitiveObjects,
@@ -302,7 +397,7 @@ struct Model {
 			glActiveTexture(GL_TEXTURE0); 
 			glBindTexture(GL_TEXTURE_2D, primitiveObjects[i].textureID);
 			// Ensure your model shader's sampler is pointed to unit 0
-			glUniform1i(glGetUniformLocation(programID, "u_BaseColorTexture"), 0);
+			glUniform1i(glGetUniformLocation(modelShader, "u_BaseColorTexture"), 0);
 
 			glDrawElements(primitive.mode, indexAccessor.count,
 						indexAccessor.componentType,
@@ -331,27 +426,63 @@ struct Model {
 		}
 	}
 
-	void render(glm::mat4 cameraMatrix) {
-		glUseProgram(programID);
+	// void render(GLuint program, glm::mat4 cameraMatrix, glm::mat4 lightMatrix) {
+	// 	glUseProgram(program);
 		
-		//model transforms 
+	// 	//model transforms 
+	// 	glm::mat4 modelMat = glm::mat4(1.0f);
+    //     modelMat = glm::translate(modelMat, position);
+    //     modelMat = glm::rotate(modelMat, rotation.x, glm::vec3(1,0,0));
+    //     modelMat = glm::rotate(modelMat, rotation.y, glm::vec3(0,1,0));
+    //     modelMat = glm::rotate(modelMat, rotation.z, glm::vec3(0,0,1));
+    //     modelMat = glm::scale(modelMat, glm::vec3(scale));
+
+	// 	// Set camera
+	// 	glm::mat4 mvp = cameraMatrix * modelMat;
+	// 	glUniformMatrix4fv(mvpMatrixID, 1, GL_FALSE, &mvp[0][0]);
+
+	// 	// Draw the GLTF model
+	// 	drawModel(primitiveObjects, model);
+	// }
+
+	void render(bool depthPass, glm::mat4 cameraMatrix, glm::mat4 lightSpaceMatrix) {
+		// 1. Select the correct shader program
+		GLuint activeProgram = depthPass ? depthShader : modelShader;
+		glUseProgram(activeProgram);
+
+		// 2. Calculate Model Matrix (Common to both passes)
 		glm::mat4 modelMat = glm::mat4(1.0f);
-        modelMat = glm::translate(modelMat, position);
-        modelMat = glm::rotate(modelMat, rotation.x, glm::vec3(1,0,0));
-        modelMat = glm::rotate(modelMat, rotation.y, glm::vec3(0,1,0));
-        modelMat = glm::rotate(modelMat, rotation.z, glm::vec3(0,0,1));
-        modelMat = glm::scale(modelMat, glm::vec3(scale));
+		modelMat = glm::translate(modelMat, position);
+		modelMat = glm::rotate(modelMat, rotation.x, glm::vec3(1, 0, 0));
+		modelMat = glm::rotate(modelMat, rotation.y, glm::vec3(0, 1, 0));
+		modelMat = glm::rotate(modelMat, rotation.z, glm::vec3(0, 0, 1));
+		modelMat = glm::scale(modelMat, glm::vec3(scale));
 
-		// Set camera
-		glm::mat4 mvp = cameraMatrix * modelMat;
-		glUniformMatrix4fv(mvpMatrixID, 1, GL_FALSE, &mvp[0][0]);
+		// 3. Set Uniforms based on the pass
+		if (depthPass) {
+			// --- PASS 1: SHADOW MAP GENERATION ---
+			// Only needs to know where the sun is and where the object is
+			glUniformMatrix4fv(glGetUniformLocation(activeProgram, "lightSpaceMatrix"), 1, GL_FALSE, &lightSpaceMatrix[0][0]);
+			glUniformMatrix4fv(glGetUniformLocation(activeProgram, "model"), 1, GL_FALSE, &modelMat[0][0]);
+		} 
+		else {
+			// --- PASS 2: MAIN RENDER ---
+			// Need standard MVP for the player's camera
+			glm::mat4 mvp = cameraMatrix * modelMat;
+			glUniformMatrix4fv(glGetUniformLocation(activeProgram, "MVP"), 1, GL_FALSE, &mvp[0][0]);
 
-		// Draw the GLTF model
+			// Need these for the shadow calculation inside the fragment shader
+			glUniformMatrix4fv(glGetUniformLocation(activeProgram, "lightSpaceMatrix"), 1, GL_FALSE, &lightSpaceMatrix[0][0]);
+			glUniformMatrix4fv(glGetUniformLocation(activeProgram, "model"), 1, GL_FALSE, &modelMat[0][0]);
+		}
+
+		// 4. Draw the actual geometry
 		drawModel(primitiveObjects, model);
 	}
 
 	void cleanup() {
-		glDeleteProgram(programID);
+		glDeleteProgram(modelShader);
+		glDeleteProgram(depthShader);
 	}
 }; 
 
@@ -445,48 +576,38 @@ struct Floor {
 		glBindVertexArray(0); // Unbind VAO to stay clean
     }
 
-    void render(glm::mat4 cameraMatrix, glm::vec3 gColor, glm::vec3 fColor, float gScale) {
-        glUseProgram(programID);
+    void render(glm::mat4 cameraMatrix, glm::mat4 lightSpaceMatrix, glm::vec3 gColor, glm::vec3 fColor, float gScale) {
+		glUseProgram(programID);
 		glBindVertexArray(vertexArrayID);
 
-        // 1. Send Vertex Data
-        glEnableVertexAttribArray(0);
-        glBindBuffer(GL_ARRAY_BUFFER, vertexBufferID);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, 0);
+		// ... (Your Vertex/Color/UV Attribute setup stays the same) ...
 
-        // 2. Send Color Data
-        glEnableVertexAttribArray(1);
-        glBindBuffer(GL_ARRAY_BUFFER, colorBufferID);
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, 0);
+		// 4. Transform Matrices
+		glm::mat4 modelMatrix = glm::mat4(1.0f);
+		modelMatrix = glm::translate(modelMatrix, position);
+		modelMatrix = glm::scale(modelMatrix, scale);
+		
+		// Calculate MVP for the player camera
+		glm::mat4 mvp = cameraMatrix * modelMatrix;
+		
+		// SEND ALL THREE to the shader
+		glUniformMatrix4fv(mvpMatrixID, 1, GL_FALSE, &mvp[0][0]);
+		// You'll need to get these IDs once during setup:
+		glUniformMatrix4fv(glGetUniformLocation(programID, "model"), 1, GL_FALSE, &modelMatrix[0][0]);
+		glUniformMatrix4fv(glGetUniformLocation(programID, "lightSpaceMatrix"), 1, GL_FALSE, &lightSpaceMatrix[0][0]);
 
-        // 3. Send UV Data
-        glEnableVertexAttribArray(2);
-        glBindBuffer(GL_ARRAY_BUFFER, uvBufferID);
-        glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 0, 0);
+		// 5. Update Grid Colors and Scale
+		glUniform3fv(gridColorID, 1, &gColor[0]);
+		glUniform3fv(floorColorID, 1, &fColor[0]);
+		glUniform1f(gridScaleID, gScale);
 
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBufferID);
+		// 6. Bind the Shadow Map texture (Pass 1 result)
+		// Assuming your shadow map is on Texture Unit 1
+		glUniform1i(glGetUniformLocation(programID, "shadowMap"), 1);
 
-        // 4. Transform Matrices
-        glm::mat4 modelMatrix = glm::mat4(1.0f);
-        modelMatrix = glm::translate(modelMatrix, position);
-        modelMatrix = glm::scale(modelMatrix, scale);
-        glm::mat4 mvp = cameraMatrix * modelMatrix;
-        glUniformMatrix4fv(mvpMatrixID, 1, GL_FALSE, &mvp[0][0]);
-
-        // 5. Update Grid Colors and Scale
-        glUniform3fv(gridColorID, 1, &gColor[0]);
-        glUniform3fv(floorColorID, 1, &fColor[0]);
-        glUniform1f(gridScaleID, gScale);
-
-        // Draw the floor
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, (void*)0);
-
+		glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, (void*)0);
 		glBindVertexArray(0);
-
-        glDisableVertexAttribArray(0);
-        glDisableVertexAttribArray(1);
-        glDisableVertexAttribArray(2);
-    }
+	}
 
     void cleanup() {
         glDeleteBuffers(1, &vertexBufferID);
@@ -833,9 +954,16 @@ int main(void)
 	bloomFBOinit(1024, 768);
 	initBlurFBOs(1024, 768);
 
+	// camera setup 
 	glm::mat4 viewMatrix, projectionMatrix;
-    
 	projectionMatrix = glm::perspective(glm::radians(FoV), 4.0f / 3.0f, zNear, zFar);
+	
+	// light setup 
+	glm::mat4 lightView, lightProjection;
+	// lightProjection = glm::perspective(glm::radians(depthFoV), (float)shadowMapWidth / shadowMapHeight, depthNear, depthFar);
+	lightProjection = glm::ortho(-100.0f, 100.0f, -100.0f, 100.0f, zNear, zFar);
+
+	initializeFBO(shadowMapWidth, shadowMapHeight);
 
 	// Time and frame rate tracking
 	static double lastTime = glfwGetTime();
@@ -859,25 +987,58 @@ int main(void)
 		viewMatrix = glm::lookAt(eye_center, lookat, up);
 		glm::mat4 vp = projectionMatrix * viewMatrix;
 
+		//light view matrix
+		lightView = glm::lookAt(lightPosition, lightLookAt, lightUp);
+		glm::mat4 lightVp = lightProjection * lightView;
+
+		// --- PASS 1: Render depth of scene to texture (from light's perspective) ---
+		glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+		glViewport(0, 0, shadowMapWidth, shadowMapHeight);
+		glClear(GL_DEPTH_BUFFER_BIT);
+		// glDisable(GL_CULL_FACE); // Disable culling so we get both sides of the triangle for the depth map
+		// Use a simplified shadow pass (culling front faces helps prevent acne)
+		glEnable(GL_CULL_FACE);
+		glCullFace(GL_FRONT);
+		
+		for(auto& palm : palms) {
+			palm.render(true, vp, lightVp);
+		}
+		for(auto& pillar : pillars) {
+			pillar.render(true, vp, lightVp);
+		}
+		bust.render(true, vp, lightVp);
+
+		// --- PASS 2: Render scene as normal using the generated depth/shadow map ---
+		glBindFramebuffer(GL_FRAMEBUFFER, hdrFBO);
+		// glEnable(GL_CULL_FACE); // Re-enable culling for normal rendering
+		glViewport(0, 0, windowWidth, windowHeight);
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		glCullFace(GL_BACK);
+
+		// Bind the shadow map texture generated in Pass 1
+		glActiveTexture(GL_TEXTURE1); 
+		glBindTexture(GL_TEXTURE_2D, depthTex); // The texture attached to 'fbo'
+
 		//render background
 		background.draw(glm::vec3(0.557f, 0.388f, 0.831f), glm::vec3(0.969f, 0.329f, 0.714f));
 
 		//render models and floor
-		sun.render(vp);
+		sun.render(false, vp, lightVp);
 
 		glDisable(GL_CULL_FACE);
-		floor.render(vp, glm::vec3(10.0f, 0.0f, 10.0f), glm::vec3(0.145f, 0.086f, 0.169f), 30.0f);
+		floor.render(vp, lightVp, glm::vec3(10.0f, 0.0f, 10.0f), glm::vec3(0.145f, 0.086f, 0.169f), 30.0f);
 		// floor.render(vp, glm::vec3(10.0f, 0.0f, 10.0f), glm::vec3(0.0f, 0.0f, 0.0f), 30.0f);
 		glEnable(GL_CULL_FACE);
 
 		for(auto& palm : palms) {
-			palm.render(vp);
+			palm.render(false, vp, lightVp);
 		}
 
 		for(auto& pillar : pillars) {
-			pillar.render(vp);
+			pillar.render(false, vp, lightVp);
 		}
-		bust.render(vp);
+
+		bust.render(false, vp, lightVp);
 
 		//filter bright areas 
 		glBindFramebuffer(GL_FRAMEBUFFER, pingpongFBO[0]);
@@ -933,6 +1094,14 @@ int main(void)
 			stream << std::fixed << std::setprecision(2) << "Frames per second (FPS): " << fps;
 			glfwSetWindowTitle(window, stream.str().c_str());
 		}
+
+		//save depth map 
+		if (saveDepth) {
+            std::string filename = "depth_camera.png";
+            saveDepthTexture(fbo, filename);
+            std::cout << "Depth texture saved to " << filename << std::endl;
+            saveDepth = false;
+        }
 
 		// Swap buffers
 		glfwSwapBuffers(window);
@@ -1021,6 +1190,11 @@ void key_callback(GLFWwindow *window, int key, int scancode, int action, int mod
 		std::cout << "up:         " << up.x << ", " << up.y << ", " << up.z << std::endl;
 		std::cout << "--------------------" << std::endl;
 	}
+
+	if (key == GLFW_KEY_SPACE && (action == GLFW_REPEAT || action == GLFW_PRESS)) 
+    {
+        saveDepth = true;
+    }
 
 	if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
 		glfwSetWindowShouldClose(window, GL_TRUE);
