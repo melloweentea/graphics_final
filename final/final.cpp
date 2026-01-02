@@ -52,6 +52,14 @@ static float viewPolar = 0.f;
 // static float viewDistance = 300.0f;
 static float viewDistance = 100.0f;
 
+//hdr fbo 
+static GLuint hdrFBO;
+static GLuint colorBuffer;
+
+//ping pong blurring fbo 
+static GLuint pingpongFBO[2];
+static GLuint pingpongColorbuffers[2];
+
 // 3d Model loading
 struct Model {
 	// Shader variable IDs
@@ -558,6 +566,137 @@ struct Background {
     }
 };
 
+// bloom framebuffer
+static void bloomFBOinit(int SCR_WIDTH, int SCR_HEIGHT) {
+	glGenFramebuffers(1, &hdrFBO);
+	glBindFramebuffer(GL_FRAMEBUFFER, hdrFBO);
+
+	glGenTextures(1, &colorBuffer);
+	glBindTexture(GL_TEXTURE_2D, colorBuffer);
+	// GL_RGBA16F is the key for HDR (High Dynamic Range)
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, SCR_WIDTH, SCR_HEIGHT, 0, GL_RGBA, GL_FLOAT, NULL);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorBuffer, 0);
+
+	// Depth Buffer so 3D models still render correctly
+	GLuint rboDepth;
+	glGenRenderbuffers(1, &rboDepth);
+	glBindRenderbuffer(GL_RENDERBUFFER, rboDepth);
+	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, SCR_WIDTH, SCR_HEIGHT);
+	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rboDepth);
+
+	if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+		std::cout << "Framebuffer not complete!" << std::endl;
+	glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void initBlurFBOs(int width, int height) {
+    glGenFramebuffers(2, pingpongFBO);
+    glGenTextures(2, pingpongColorbuffers);
+    for (unsigned int i = 0; i < 2; i++) {
+        glBindFramebuffer(GL_FRAMEBUFFER, pingpongFBO[i]);
+        glBindTexture(GL_TEXTURE_2D, pingpongColorbuffers[i]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, width, height, 0, GL_RGBA, GL_FLOAT, NULL);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); // Prevents blur bleeding
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, pingpongColorbuffers[i], 0);
+    }
+}
+
+struct ScreenQuad {
+    // 4 Vertices for a full-screen quad (NDC coordinates)
+    GLfloat vertex_buffer_data[12] = {
+        -1.0f,  1.0f, 0.0f,  // Top Left
+        -1.0f, -1.0f, 0.0f,  // Bottom Left
+         1.0f, -1.0f, 0.0f,  // Bottom Right
+         1.0f,  1.0f, 0.0f   // Top Right
+    };
+
+    GLfloat uv_buffer_data[8] = {
+        0.0f, 1.0f,
+        0.0f, 0.0f,
+        1.0f, 0.0f,
+        1.0f, 1.0f
+    };
+
+    GLuint index_buffer_data[6] = {
+        0, 1, 2,
+        0, 2, 3
+    };
+
+    GLuint vertexArrayID, vertexBufferID, indexBufferID, uvBufferID;
+    GLuint programID, sceneTexID, bloomTexID, exposureID;
+
+    void initialize() {
+        glGenVertexArrays(1, &vertexArrayID);
+        glBindVertexArray(vertexArrayID);
+
+        // Position Buffer
+        glGenBuffers(1, &vertexBufferID);
+        glBindBuffer(GL_ARRAY_BUFFER, vertexBufferID);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertex_buffer_data), vertex_buffer_data, GL_STATIC_DRAW);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, (void*)0);
+        glEnableVertexAttribArray(0);
+
+        // UV Buffer
+        glGenBuffers(1, &uvBufferID);
+        glBindBuffer(GL_ARRAY_BUFFER, uvBufferID);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(uv_buffer_data), uv_buffer_data, GL_STATIC_DRAW);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, (void*)0);
+        glEnableVertexAttribArray(1);
+
+        // Index Buffer
+        glGenBuffers(1, &indexBufferID);
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indexBufferID);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(index_buffer_data), index_buffer_data, GL_STATIC_DRAW);
+
+        // Load Shaders
+        programID = LoadShadersFromFile("../final/bloom.vert", "../final/bloom.frag");
+        
+		if (programID == 0) {
+			std::cerr << "Failed to load screen quad shaders." << std::endl;
+			return;
+		}
+
+        // Get Uniform Handles
+        sceneTexID  = glGetUniformLocation(programID, "scene");
+        bloomTexID  = glGetUniformLocation(programID, "bloomBlur");
+        exposureID  = glGetUniformLocation(programID, "exposure");
+    }
+
+    void render(GLuint originalSceneTex, GLuint blurredGlowTex, float exposure) {
+        glUseProgram(programID);
+        glBindVertexArray(vertexArrayID);
+
+        // Texture Unit 0: The crisp scene
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, originalSceneTex);
+        glUniform1i(sceneTexID, 0);
+
+        // Texture Unit 1: The blurred glow
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, blurredGlowTex);
+        glUniform1i(bloomTexID, 1);
+
+        glUniform1f(exposureID, exposure);
+
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, (void*)0);
+        glBindVertexArray(0);
+    }
+
+	void cleanup() {
+		glDeleteBuffers(1, &vertexBufferID);
+		glDeleteBuffers(1, &uvBufferID);
+		glDeleteBuffers(1, &indexBufferID);
+		glDeleteVertexArrays(1, &vertexArrayID);
+		glDeleteProgram(programID);
+	}
+};
+
 int main(void)
 {
 	// Initialise GLFW
@@ -664,6 +803,23 @@ int main(void)
     // eye_center.x = viewDistance * cos(viewAzimuth);
     // eye_center.z = viewDistance * sin(viewAzimuth);
 
+	ScreenQuad bloom;
+	bloom.initialize();
+	
+	//load blur shaders 
+	GLuint blurShaderProgram = LoadShadersFromFile("../final/blur.vert", "../final/blur.frag");
+
+	if (blurShaderProgram == 0)
+		{
+			std::cerr << "Failed to load shaders." << std::endl;
+		}
+
+	// Get the location of the "horizontal" uniform so we can toggle it
+	GLuint horizontalLoc = glGetUniformLocation(blurShaderProgram, "horizontal");
+
+	bloomFBOinit(1024, 768);
+	initBlurFBOs(1024, 768);
+
 	glm::mat4 viewMatrix, projectionMatrix;
     
 	projectionMatrix = glm::perspective(glm::radians(FoV), 4.0f / 3.0f, zNear, zFar);
@@ -676,6 +832,10 @@ int main(void)
 
 	do
 	{
+		//render scene to HDR framebuffer
+		glBindFramebuffer(GL_FRAMEBUFFER, hdrFBO);
+		glClearColor(0.0f, 0.0f, 0.0f, 1.0f); //clear hdr buffer 
+
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 		// Update states for animation
@@ -693,7 +853,7 @@ int main(void)
 		sun.render(vp);
 
 		glDisable(GL_CULL_FACE);
-		floor.render(vp, glm::vec3(1.0f, 0.0f, 1.0f), glm::vec3(0.16f, 0.13f, 0.16f), 30.0f);
+		floor.render(vp, glm::vec3(10.0f, 0.0f, 10.0f), glm::vec3(0.16f, 0.13f, 0.16f), 30.0f);
 		glEnable(GL_CULL_FACE);
 
 		for(auto& palm : palms) {
@@ -704,6 +864,34 @@ int main(void)
 			pillar.render(vp);
 		}
 		bust.render(vp);
+
+		// Bloom post-processing 
+		bool horizontal = true, first_iteration = true;
+		int amount = 10; // Blur iterations
+		glUseProgram(blurShaderProgram);
+		
+		for (unsigned int i = 0; i < amount; i++) {
+			glBindFramebuffer(GL_FRAMEBUFFER, pingpongFBO[horizontal]);
+			glUniform1i(glGetUniformLocation(blurShaderProgram, "horizontal"), horizontal);
+			
+			// Bind texture from HDR FBO on first pass, then swap between ping-pongs
+			glBindTexture(GL_TEXTURE_2D, first_iteration ? colorBuffer : pingpongColorbuffers[!horizontal]);
+			
+			// Use the ScreenQuad's VAO to draw a full-screen triangle for the blur
+			glBindVertexArray(bloom.vertexArrayID);
+			glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, (void*)0);
+			
+			horizontal = !horizontal;
+			if (first_iteration) first_iteration = false;
+		}
+
+		// --- PASS 3: Composite Bloom onto Screen ---
+		glBindFramebuffer(GL_FRAMEBUFFER, 0); // Back to the actual screen
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+		// This calls your ScreenQuad::render which uses bloom_final.frag
+		// colorBuffer = sharp scene, pingpongColorbuffers = blurred glow
+		bloom.render(colorBuffer, pingpongColorbuffers[!horizontal], 1.0f);
 
 		// Update camera
 		// viewAzimuth += 0.1f * deltaTime;
@@ -742,6 +930,7 @@ int main(void)
 		pillar.cleanup();
 	}
 	bust.cleanup();
+	bloom.cleanup();
 
 	// Close OpenGL window and terminate GLFW
 	glfwTerminate();
