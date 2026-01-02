@@ -490,6 +490,74 @@ struct Floor {
     }
 };
 
+// bg 	
+struct Background {
+    unsigned int VAO, VBO;
+    unsigned int programID;
+    
+    // Uniform Handles
+    unsigned int colorTopID;
+    unsigned int colorBottomID;
+
+    void init() {
+        // Setup Quad Geometry (Screen-space)
+        float vertices[] = {
+            -1.0f,  1.0f, 0.0f, // Top Left
+            -1.0f, -1.0f, 0.0f, // Bottom Left
+             1.0f,  1.0f, 0.0f, // Top Right
+             1.0f, -1.0f, 0.0f  // Bottom Right
+        };
+
+        glGenVertexArrays(1, &VAO);
+        glGenBuffers(1, &VBO);
+
+        glBindVertexArray(VAO);
+        glBindBuffer(GL_ARRAY_BUFFER, VBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+
+		// Load Shaders from File
+        programID = LoadShadersFromFile("../final/bg.vert", "../final/bg.frag");
+        
+        if (programID == 0) {
+            std::cerr << "Failed to load background shaders." << std::endl;
+            return;
+        }
+
+        // Get Uniform Handles
+        colorTopID    = glGetUniformLocation(programID, "colorTop");
+        colorBottomID = glGetUniformLocation(programID, "colorBottom");
+
+        glBindVertexArray(0); 
+    }
+
+    void draw(const glm::vec3& topColor, const glm::vec3& bottomColor) {
+        glDisable(GL_DEPTH_TEST); 
+        glDepthMask(GL_FALSE); 
+
+        glUseProgram(programID);
+
+        // glUniform3fv is used to pass a vec3 (pointer to 3 floats)
+        glUniform3fv(colorTopID, 1, &topColor[0]);
+        glUniform3fv(colorBottomID, 1, &bottomColor[0]);
+
+        glBindVertexArray(VAO);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        glBindVertexArray(0);
+
+        glDepthMask(GL_TRUE);
+        glEnable(GL_DEPTH_TEST);
+    }
+
+    void cleanup() {
+        glDeleteVertexArrays(1, &VAO);
+        glDeleteBuffers(1, &VBO);
+        glDeleteProgram(programID);
+    }
+};
+
 int main(void)
 {
 	// Initialise GLFW
@@ -531,6 +599,9 @@ int main(void)
 
 	glEnable(GL_DEPTH_TEST);
 	glEnable(GL_CULL_FACE);
+
+	Background background;
+	background.init();
 
 	Model sun;
 	sun.initialize("../final/model/sun/sun.gltf"); 
@@ -615,6 +686,9 @@ int main(void)
 		viewMatrix = glm::lookAt(eye_center, lookat, up);
 		glm::mat4 vp = projectionMatrix * viewMatrix;
 
+		//render background
+		background.draw(glm::vec3(0.557f, 0.388f, 0.831f), glm::vec3(0.969f, 0.329f, 0.714f));
+
 		//render models and floor
 		sun.render(vp);
 
@@ -658,6 +732,7 @@ int main(void)
 	} // Check if the ESC key was pressed or the window was closed
 	while (!glfwWindowShouldClose(window));
 
+	background.cleanup();
 	sun.cleanup();
 	floor.cleanup();
 	for(auto& palm : palms) {
