@@ -9,11 +9,12 @@ uniform float exposure;      // Controls how bright the final scene is
 
 void main() {             
     const float gamma = 2.2;
+    const float bloomIntensity = 0.5; // Adjust bloom intensity if needed
     vec3 hdrColor = texture(scene, TexCoords).rgb;      
     vec3 bloomColor = texture(bloomBlur, TexCoords).rgb;
     
     // 1. Additive blending: Add the glow on top of the original
-    hdrColor += bloomColor; 
+    hdrColor += bloomColor * bloomIntensity;
     
     // 2. Tone mapping: Converts HDR (0 to 10+) back to LDR (0 to 1) 
     // so your monitor can display it correctly.

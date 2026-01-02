@@ -688,6 +688,12 @@ struct ScreenQuad {
         glBindVertexArray(0);
     }
 
+	void draw() {
+		glBindVertexArray(vertexArrayID);
+		glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, (void*)0);
+		glBindVertexArray(0);
+	}
+
 	void cleanup() {
 		glDeleteBuffers(1, &vertexBufferID);
 		glDeleteBuffers(1, &uvBufferID);
@@ -795,7 +801,7 @@ int main(void)
 	Model bust;
 	bust.initialize("../final/model/helios_vaporwave_bust/scene.gltf");
 	bust.rotation.x = -glm::radians(90.0f);
-	bust.scale = 0.5f;
+	bust.scale = 0.8f;
     // ---------------------------
 
 	// Camera setup, set eye location 
@@ -813,9 +819,16 @@ int main(void)
 		{
 			std::cerr << "Failed to load shaders." << std::endl;
 		}
-
+	
 	// Get the location of the "horizontal" uniform so we can toggle it
 	GLuint horizontalLoc = glGetUniformLocation(blurShaderProgram, "horizontal");
+	
+	GLuint brightShader = LoadShadersFromFile("../final/bright.vert", "../final/bright.frag");
+
+	if (brightShader == 0)
+		{
+			std::cerr << "Failed to load shaders." << std::endl;
+		}
 
 	bloomFBOinit(1024, 768);
 	initBlurFBOs(1024, 768);
@@ -853,7 +866,8 @@ int main(void)
 		sun.render(vp);
 
 		glDisable(GL_CULL_FACE);
-		floor.render(vp, glm::vec3(10.0f, 0.0f, 10.0f), glm::vec3(0.16f, 0.13f, 0.16f), 30.0f);
+		floor.render(vp, glm::vec3(10.0f, 0.0f, 10.0f), glm::vec3(0.145f, 0.086f, 0.169f), 30.0f);
+		// floor.render(vp, glm::vec3(10.0f, 0.0f, 10.0f), glm::vec3(0.0f, 0.0f, 0.0f), 30.0f);
 		glEnable(GL_CULL_FACE);
 
 		for(auto& palm : palms) {
@@ -864,6 +878,13 @@ int main(void)
 			pillar.render(vp);
 		}
 		bust.render(vp);
+
+		//filter bright areas 
+		glBindFramebuffer(GL_FRAMEBUFFER, pingpongFBO[0]);
+		glUseProgram(brightShader);
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, colorBuffer); 
+		bloom.draw(); 
 
 		// Bloom post-processing 
 		bool horizontal = true, first_iteration = true;
