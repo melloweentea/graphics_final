@@ -162,6 +162,9 @@ struct Model {
     glm::vec3 rotation = glm::vec3(0.0f); // Euler angles
     float scale = 1.0f;
 
+	//for animation
+	float rotationAngle = 0.0f;
+
 	// Each VAO corresponds to each mesh primitive in the GLTF model
 	struct PrimitiveObject {
 		GLuint vao;
@@ -426,24 +429,16 @@ struct Model {
 		}
 	}
 
-	// void render(GLuint program, glm::mat4 cameraMatrix, glm::mat4 lightMatrix) {
-	// 	glUseProgram(program);
-		
-	// 	//model transforms 
-	// 	glm::mat4 modelMat = glm::mat4(1.0f);
-    //     modelMat = glm::translate(modelMat, position);
-    //     modelMat = glm::rotate(modelMat, rotation.x, glm::vec3(1,0,0));
-    //     modelMat = glm::rotate(modelMat, rotation.y, glm::vec3(0,1,0));
-    //     modelMat = glm::rotate(modelMat, rotation.z, glm::vec3(0,0,1));
-    //     modelMat = glm::scale(modelMat, glm::vec3(scale));
+	void update(float deltaTime, float spinSpeed) {
+		// 1. Update the dedicated animation variable
+		rotationAngle += spinSpeed * deltaTime;
 
-	// 	// Set camera
-	// 	glm::mat4 mvp = cameraMatrix * modelMat;
-	// 	glUniformMatrix4fv(mvpMatrixID, 1, GL_FALSE, &mvp[0][0]);
+		// 2. Wrap the angle to stay within 0-360 range (optional but good practice)
+		if (rotationAngle > 360.0f) rotationAngle -= 360.0f;
 
-	// 	// Draw the GLTF model
-	// 	drawModel(primitiveObjects, model);
-	// }
+		// 3. Update the rotation Y value that the render function uses
+		rotation.z = rotationAngle; 
+	}
 
 	void render(bool depthPass, glm::mat4 cameraMatrix, glm::mat4 lightSpaceMatrix) {
 		// 1. Select the correct shader program
@@ -983,6 +978,9 @@ int main(void)
         double currentTime = glfwGetTime();
         float deltaTime = float(currentTime - lastTime);
 		lastTime = currentTime;
+
+		//update bust rotation
+		bust.update(deltaTime, 2.0f); // Rotate at 10 degrees per second
 
 		viewMatrix = glm::lookAt(eye_center, lookat, up);
 		glm::mat4 vp = projectionMatrix * viewMatrix;
