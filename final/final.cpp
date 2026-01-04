@@ -86,6 +86,10 @@ static float depthFar = 750.0f;
 
 static bool saveDepth = false;
 
+// Animation 
+static bool playAnimation = true;
+static float playbackSpeed = 2.0f;
+
 // shadow mapping 
 static void saveDepthTexture(GLuint fbo, std::string filename) {
     int width = shadowMapWidth;
@@ -410,22 +414,21 @@ struct Model {
 		}
 	}
 
+	void drawModel(const std::vector<PrimitiveObject>& primitiveObjects, tinygltf::Model &model) {
+		const tinygltf::Scene &scene = model.scenes[model.defaultScene];
+		for (size_t i = 0; i < scene.nodes.size(); ++i) {
+			drawModelNodes(primitiveObjects, model, model.nodes[scene.nodes[i]]);
+		}
+	}
+
+	// Update drawModelNodes to pass the primitiveCounter through
 	void drawModelNodes(const std::vector<PrimitiveObject>& primitiveObjects,
 						tinygltf::Model &model, tinygltf::Node &node) {
-		// Draw the mesh at the node, and recursively do so for children nodes
 		if ((node.mesh >= 0) && (node.mesh < model.meshes.size())) {
 			drawMesh(primitiveObjects, model, model.meshes[node.mesh]);
 		}
 		for (size_t i = 0; i < node.children.size(); i++) {
 			drawModelNodes(primitiveObjects, model, model.nodes[node.children[i]]);
-		}
-	}
-	void drawModel(const std::vector<PrimitiveObject>& primitiveObjects,
-				tinygltf::Model &model) {
-		// Draw all nodes
-		const tinygltf::Scene &scene = model.scenes[model.defaultScene];
-		for (size_t i = 0; i < scene.nodes.size(); ++i) {
-			drawModelNodes(primitiveObjects, model, model.nodes[scene.nodes[i]]);
 		}
 	}
 
@@ -819,6 +822,683 @@ struct ScreenQuad {
 	}
 };
 
+// skeletal animation model
+struct MyBot {
+	// Shader variable IDs
+	GLuint mvpMatrixID;
+	GLuint jointMatricesID;
+	GLuint lightPositionID;
+	GLuint lightIntensityID;
+	GLuint programID;
+
+	tinygltf::Model model;
+
+	std::vector<glm::mat4> m_globalTransforms;
+
+	// Each VAO corresponds to each mesh primitive in the GLTF model
+	struct PrimitiveObject {
+		GLuint vao;
+		std::map<int, GLuint> vbos;
+	};
+	std::vector<PrimitiveObject> primitiveObjects;
+
+	// Skinning 
+	struct SkinObject {
+		// Transforms the geometry into the space of the respective joint
+		std::vector<glm::mat4> inverseBindMatrices;  
+
+		// Transforms the geometry following the movement of the joints
+		std::vector<glm::mat4> globalJointTransforms;
+
+		// Combined transforms
+		std::vector<glm::mat4> jointMatrices;
+	};
+	std::vector<SkinObject> skinObjects;
+
+	// Animation 
+	struct SamplerObject {
+		std::vector<float> input;
+		std::vector<glm::vec4> output;
+		int interpolation;
+	};
+	struct ChannelObject {
+		int sampler;
+		std::string targetPath;
+		int targetNode;
+	}; 
+	struct AnimationObject {
+		std::vector<SamplerObject> samplers;	// Animation data
+	};
+	std::vector<AnimationObject> animationObjects;
+
+	glm::mat4 getNodeTransform(const tinygltf::Node& node) {
+		glm::mat4 transform(1.0f); 
+
+		if (node.matrix.size() == 16) {
+			transform = glm::make_mat4(node.matrix.data());
+		} else {
+			if (node.translation.size() == 3) {
+				transform = glm::translate(transform, glm::vec3(node.translation[0], node.translation[1], node.translation[2]));
+			}
+			if (node.rotation.size() == 4) {
+				glm::quat q(node.rotation[3], node.rotation[0], node.rotation[1], node.rotation[2]);
+				transform *= glm::mat4_cast(q);
+			}
+			if (node.scale.size() == 3) {
+				transform = glm::scale(transform, glm::vec3(node.scale[0], node.scale[1], node.scale[2]));
+			}
+		}
+		return transform;
+	}
+
+	void computeLocalNodeTransform(const tinygltf::Model& model, 
+		int nodeIndex, 
+		std::vector<glm::mat4> &localTransforms)
+	{
+		glm::mat4 nodeTransform; 
+		nodeTransform = getNodeTransform(model.nodes[nodeIndex]);
+		localTransforms[nodeIndex] = nodeTransform;
+
+		const tinygltf::Node& node = model.nodes[nodeIndex];
+		for (const int childIndex : node.children) {
+			computeLocalNodeTransform(model, childIndex, localTransforms);
+		}
+	}
+
+	void computeGlobalNodeTransform(const tinygltf::Model& model, 
+		const std::vector<glm::mat4> &localTransforms,
+		int nodeIndex, const glm::mat4& parentTransform, 
+		std::vector<glm::mat4> &globalTransforms)
+	{
+		glm::mat4 globalTransform = parentTransform * localTransforms[nodeIndex];
+		globalTransforms[nodeIndex] = globalTransform;
+
+		const tinygltf::Node& node = model.nodes[nodeIndex];
+		for (const int childIndex : node.children) {
+			computeGlobalNodeTransform(model, localTransforms, childIndex, globalTransform, globalTransforms);
+		}
+
+	}
+
+	std::vector<SkinObject> prepareSkinning(const tinygltf::Model &model) {
+		std::vector<SkinObject> skinObjects;
+
+		for (size_t i = 0; i < model.skins.size(); i++) {
+			SkinObject skinObject;
+			const tinygltf::Skin &skin = model.skins[i];
+
+			// 1. Load Inverse Bind Matrices
+			const tinygltf::Accessor &accessor = model.accessors[skin.inverseBindMatrices];
+			const tinygltf::BufferView &bufferView = model.bufferViews[accessor.bufferView];
+			const tinygltf::Buffer &buffer = model.buffers[bufferView.buffer];
+			const float *ptr = reinterpret_cast<const float *>(
+				buffer.data.data() + accessor.byteOffset + bufferView.byteOffset);
+			
+			skinObject.inverseBindMatrices.resize(accessor.count);
+			for (size_t j = 0; j < accessor.count; j++) {
+				skinObject.inverseBindMatrices[j] = glm::make_mat4(ptr + j * 16);
+			}
+
+			// 2. Initialize Global Transforms for all nodes in the model
+			std::vector<glm::mat4> localTransforms(model.nodes.size(), glm::mat4(1.0f));
+			std::vector<glm::mat4> globalTransforms(model.nodes.size(), glm::mat4(1.0f));
+
+			// fill localTransforms
+			const tinygltf::Scene &scene = model.scenes[model.defaultScene >= 0 ? model.defaultScene : 0];
+			for (int rootIndex : scene.nodes) {
+				computeLocalNodeTransform(model, rootIndex, localTransforms);
+			}
+
+			// compute globalTransforms
+			for (int rootIndex : scene.nodes) {
+				computeGlobalNodeTransform(model, localTransforms, rootIndex, glm::mat4(1.0f), globalTransforms);
+			}
+
+			// 3. Compute joint matrices
+			skinObject.jointMatrices.resize(skin.joints.size());
+			for (size_t j = 0; j < skin.joints.size(); ++j) {
+				int jointNodeIndex = skin.joints[j];
+
+				// Use the global transform we just calculated for this specific joint node
+				glm::mat4 globalTransform = globalTransforms[jointNodeIndex];
+				glm::mat4 inverseBindMatrix = skinObject.inverseBindMatrices[j];
+
+				// The core skinning equation
+				skinObject.jointMatrices[j] = globalTransform * inverseBindMatrix;
+			}
+
+			skinObjects.push_back(skinObject);
+		}
+		return skinObjects;
+	}
+
+	int findKeyframeIndex(const std::vector<float>& times, float animationTime) 
+	{
+		int left = 0;
+		int right = times.size() - 1;
+
+		while (left <= right) {
+			int mid = (left + right) / 2;
+
+			if (mid + 1 < times.size() && times[mid] <= animationTime && animationTime < times[mid + 1]) {
+				return mid;
+			}
+			else if (times[mid] > animationTime) {
+				right = mid - 1;
+			}
+			else { // animationTime >= times[mid + 1]
+				left = mid + 1;
+			}
+		}
+
+		// Target not found
+		return (times.size() < 2) ? 0 : times.size() - 2;
+	}
+
+	std::vector<AnimationObject> prepareAnimation(const tinygltf::Model &model) 
+	{
+		std::vector<AnimationObject> animationObjects;
+		for (const auto &anim : model.animations) {
+			AnimationObject animationObject;
+			
+			for (const auto &sampler : anim.samplers) {
+				SamplerObject samplerObject;
+
+				const tinygltf::Accessor &inputAccessor = model.accessors[sampler.input];
+				const tinygltf::BufferView &inputBufferView = model.bufferViews[inputAccessor.bufferView];
+				const tinygltf::Buffer &inputBuffer = model.buffers[inputBufferView.buffer];
+
+				assert(inputAccessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT);
+				assert(inputAccessor.type == TINYGLTF_TYPE_SCALAR);
+
+				// Input (time) values
+				samplerObject.input.resize(inputAccessor.count);
+
+				const unsigned char *inputPtr = &inputBuffer.data[inputBufferView.byteOffset + inputAccessor.byteOffset];
+				const float *inputBuf = reinterpret_cast<const float*>(inputPtr);
+
+				// Read input (time) values
+				int stride = inputAccessor.ByteStride(inputBufferView);
+				for (size_t i = 0; i < inputAccessor.count; ++i) {
+					samplerObject.input[i] = *reinterpret_cast<const float*>(inputPtr + i * stride);
+				}
+				
+				const tinygltf::Accessor &outputAccessor = model.accessors[sampler.output];
+				const tinygltf::BufferView &outputBufferView = model.bufferViews[outputAccessor.bufferView];
+				const tinygltf::Buffer &outputBuffer = model.buffers[outputBufferView.buffer];
+
+				assert(outputAccessor.componentType == TINYGLTF_COMPONENT_TYPE_FLOAT);
+
+				const unsigned char *outputPtr = &outputBuffer.data[outputBufferView.byteOffset + outputAccessor.byteOffset];
+				const float *outputBuf = reinterpret_cast<const float*>(outputPtr);
+
+				int outputStride = outputAccessor.ByteStride(outputBufferView);
+				
+				// Output values
+				samplerObject.output.resize(outputAccessor.count);
+				
+				for (size_t i = 0; i < outputAccessor.count; ++i) {
+					// Calculate exact pointer using stride
+					const unsigned char* elementPtr = outputPtr + (i * outputStride);
+
+					if (outputAccessor.type == TINYGLTF_TYPE_VEC3) {
+						glm::vec3 val;
+						memcpy(&val, elementPtr, 3 * sizeof(float));
+						samplerObject.output[i] = glm::vec4(val, 0.0f); // Pad with 0
+					} else if (outputAccessor.type == TINYGLTF_TYPE_VEC4) {
+						memcpy(&samplerObject.output[i], elementPtr, 4 * sizeof(float));
+					}
+				}
+
+				animationObject.samplers.push_back(samplerObject);			
+			}
+
+			animationObjects.push_back(animationObject);
+		}
+		return animationObjects;
+	}
+
+	void updateAnimationValues(
+		const tinygltf::Model &model, 
+		const tinygltf::Animation &anim, 
+		const AnimationObject &animationObject, 
+		float time,
+		std::vector<glm::vec3> &translations,
+    	std::vector<glm::quat> &rotations,
+    	std::vector<glm::vec3> &scales) 
+	{
+		// There are many channels so we have to accumulate the transforms 
+		for (const auto &channel : anim.channels) {
+			
+			int targetNodeIndex = channel.target_node;
+			const auto &sampler = anim.samplers[channel.sampler];
+			
+			// Access output (value) data for the channel
+			const tinygltf::Accessor &outputAccessor = model.accessors[sampler.output];
+			const tinygltf::BufferView &outputBufferView = model.bufferViews[outputAccessor.bufferView];
+			const tinygltf::Buffer &outputBuffer = model.buffers[outputBufferView.buffer];
+
+			// Calculate current animation time (wrap if necessary)
+			const std::vector<float> &times = animationObject.samplers[channel.sampler].input;
+			if (times.empty()) continue;
+			float animationTime = fmod(time, times.back());
+			
+			// ----------------------------------------------------------
+			// TODO: Find a keyframe for getting animation data 
+			// ----------------------------------------------------------
+			int keyframeIndex = findKeyframeIndex(times, animationTime); 
+
+			int nextKeyframeIndex = (keyframeIndex + 1) % times.size();
+
+			float t = 0.0f;
+			float timeStart = times[keyframeIndex];
+			float timeEnd = times[nextKeyframeIndex];
+			
+			// Check for validity to avoid division by zero
+			if (timeEnd > timeStart) {
+				t = (animationTime - timeStart) / (timeEnd - timeStart);
+			} else if (nextKeyframeIndex == 0) {
+				// Handle looping (end of animation -> start)
+				// The duration of this last segment is (MaxTime - timeStart) + timeEnd
+				float segmentDuration = (times.back() - timeStart) + timeEnd;
+				float timeIntoSegment = (animationTime - timeStart);
+				if(timeIntoSegment < 0) timeIntoSegment += times.back(); // Wrapped around
+				
+				// Simplified: If looping is complex, just clamping t=0 is often safe enough for basic needs
+				t = 0.0f; 
+			}
+
+			const unsigned char *outputPtr = &outputBuffer.data[outputBufferView.byteOffset + outputAccessor.byteOffset];
+			const float *outputBuf = reinterpret_cast<const float*>(outputPtr);
+
+			// --- UPDATED ASSIGNMENT LOGIC ---
+			if (channel.target_path == "translation") {
+				glm::vec3 val0 = glm::make_vec3(outputBuf + keyframeIndex * 3);
+				glm::vec3 val1 = glm::make_vec3(outputBuf + nextKeyframeIndex * 3);
+				translations[targetNodeIndex] = glm::mix(val0, val1, t); // OVERRIDE
+			} 
+			else if (channel.target_path == "rotation") {
+				float raw0[4], raw1[4];
+				memcpy(raw0, outputBuf + keyframeIndex * 4, 4 * sizeof(float));
+				memcpy(raw1, outputBuf + nextKeyframeIndex * 4, 4 * sizeof(float));
+				
+				// glTF is (x,y,z,w), GLM constructor is (w,x,y,z)
+				glm::quat q0(raw0[3], raw0[0], raw0[1], raw0[2]); 
+				glm::quat q1(raw1[3], raw1[0], raw1[1], raw1[2]);
+				
+				rotations[targetNodeIndex] = glm::normalize(glm::slerp(q0, q1, t)); // OVERRIDE
+			} 
+			else if (channel.target_path == "scale") {
+				glm::vec3 val0 = glm::make_vec3(outputBuf + keyframeIndex * 3);
+				glm::vec3 val1 = glm::make_vec3(outputBuf + nextKeyframeIndex * 3);
+				scales[targetNodeIndex] = glm::mix(val0, val1, t); // OVERRIDE
+			}
+		}
+	}
+
+	void updateSkinning(const std::vector<glm::mat4> &globalTransforms) {
+    for (size_t k = 0; k < model.skins.size(); k++) {
+        const tinygltf::Skin &skin = model.skins[k];
+        SkinObject &skinObject = skinObjects[k];
+
+        // 1. IMPORTANT: Find the node that actually uses this skin.
+        // Usually, you can find which node has 'node.skin == k'.
+        glm::mat4 invMeshGlobalTransform = glm::mat4(1.0f);
+        for (size_t n = 0; n < model.nodes.size(); ++n) {
+            if (model.nodes[n].skin == (int)k) {
+                invMeshGlobalTransform = glm::inverse(globalTransforms[n]);
+                break;
+            }
+        }
+
+        for (size_t i = 0; i < skin.joints.size(); ++i) {
+            int jointNodeIndex = skin.joints[i];
+            const glm::mat4& globalBoneTransform = globalTransforms[jointNodeIndex];
+            const glm::mat4& inverseBindMatrix = skinObject.inverseBindMatrices[i];
+
+            // 2. The formula that fixes the "Massive Scale" and "Offset" issues:
+            skinObject.jointMatrices[i] = invMeshGlobalTransform * globalBoneTransform * inverseBindMatrix;
+        }
+    }
+}
+
+	// Helper to build matrix from TRS
+	glm::mat4 composeTransform(const glm::vec3& t, const glm::quat& r, const glm::vec3& s) {
+		glm::mat4 mat = glm::translate(glm::mat4(1.0f), t);
+		mat = mat * glm::mat4_cast(r);
+		mat = glm::scale(mat, s);
+		return mat;
+	}
+
+	void update(float time) {
+		if (model.animations.size() > 0 && !model.skins.empty()) {
+			const tinygltf::Animation &animation = model.animations[0];
+			const AnimationObject &animationObject = animationObjects[0];
+			
+			// 1. Initialize TRS components for ALL nodes from their bind pose
+			std::vector<glm::vec3> translations(model.nodes.size());
+			std::vector<glm::quat> rotations(model.nodes.size());
+			std::vector<glm::vec3> scales(model.nodes.size());
+
+			for(size_t i = 0; i < model.nodes.size(); ++i) {
+				const tinygltf::Node& node = model.nodes[i];
+				
+				// Default values
+				translations[i] = glm::vec3(0.0f);
+				rotations[i] = glm::quat(1.0f, 0.0f, 0.0f, 0.0f); // Identity (w,x,y,z)
+				scales[i] = glm::vec3(1.0f);
+
+				// Load from glTF if present
+				if (node.translation.size() == 3) 
+					translations[i] = glm::vec3(node.translation[0], node.translation[1], node.translation[2]);
+				if (node.rotation.size() == 4) 
+					rotations[i] = glm::quat(node.rotation[3], node.rotation[0], node.rotation[1], node.rotation[2]);
+				if (node.scale.size() == 3) 
+					scales[i] = glm::vec3(node.scale[0], node.scale[1], node.scale[2]);
+			}
+
+			// 2. Apply Animation (Override specific components)
+			// Pass the vectors by reference to be modified
+			updateAnimationValues(model, animation, animationObject, time, translations, rotations, scales);
+
+			// 3. Rebuild the nodeTransforms matrix from the updated components
+			std::vector<glm::mat4> nodeTransforms(model.nodes.size());
+			for(size_t i = 0; i < model.nodes.size(); ++i) {
+				nodeTransforms[i] = composeTransform(translations[i], rotations[i], scales[i]);
+			}
+
+			// 4. Calculate Global Transforms (Standard recursion)
+			std::vector<glm::mat4> globalTransforms(model.nodes.size(), glm::mat4(1.0f));
+			const tinygltf::Scene &scene = model.scenes[model.defaultScene];
+			for (int rootNodeIdx : scene.nodes) {
+				computeGlobalNodeTransform(model, nodeTransforms, rootNodeIdx, glm::mat4(1.0f), globalTransforms);
+			}
+
+			// 5. Skinning
+			updateSkinning(globalTransforms);
+			this->m_globalTransforms = globalTransforms;
+		}
+	}
+
+	bool loadModel(tinygltf::Model &model, const char *filename) {
+		tinygltf::TinyGLTF loader;
+		std::string err;
+		std::string warn;
+
+		bool res = loader.LoadASCIIFromFile(&model, &err, &warn, filename);
+		if (!warn.empty()) {
+			std::cout << "WARN: " << warn << std::endl;
+		}
+
+		if (!err.empty()) {
+			std::cout << "ERR: " << err << std::endl;
+		}
+
+		if (!res)
+			std::cout << "Failed to load glTF: " << filename << std::endl;
+		else
+			std::cout << "Loaded glTF: " << filename << std::endl;
+
+		return res;
+	}
+
+	void initialize() {
+		// Modify your path if needed
+		if (!loadModel(model, "../final/model/walking_astronaut/scene.gltf")) {
+			return;
+		}
+
+		// Prepare buffers for rendering 
+		primitiveObjects = bindModel(model);
+
+		// Prepare joint matrices
+		skinObjects = prepareSkinning(model);
+
+		// Prepare animation data 
+		animationObjects = prepareAnimation(model);
+
+		// Create and compile our GLSL program from the shaders
+		programID = LoadShadersFromFile("../final/bot.vert", "../final/bot.frag");
+		if (programID == 0)
+		{
+			std::cerr << "Failed to load shaders." << std::endl;
+		}
+
+		// Get a handle for GLSL variables
+		mvpMatrixID = glGetUniformLocation(programID, "MVP");
+		lightPositionID = glGetUniformLocation(programID, "lightPosition");
+		lightIntensityID = glGetUniformLocation(programID, "lightIntensity");
+		jointMatricesID = glGetUniformLocation(programID, "jointMatrices");
+		
+		// Check if it was found (Optional but recommended)
+		if (jointMatricesID == -1) {
+			std::cerr << "Warning: jointMatrices uniform not found in shader!" << std::endl;
+		}
+	}
+
+	void bindMesh(std::vector<PrimitiveObject> &primitiveObjects,
+				tinygltf::Model &model, tinygltf::Mesh &mesh) {
+
+		std::map<int, GLuint> vbos;
+		for (size_t i = 0; i < model.bufferViews.size(); ++i) {
+			const tinygltf::BufferView &bufferView = model.bufferViews[i];
+			
+			int target = bufferView.target;
+			
+			// FIX: If target is 0 (common for skinning), treat it as GL_ARRAY_BUFFER
+			if (target == 0) { 
+				target = GL_ARRAY_BUFFER; 
+			}
+
+			const tinygltf::Buffer &buffer = model.buffers[bufferView.buffer];
+			GLuint vbo;
+			glGenBuffers(1, &vbo);
+			glBindBuffer(target, vbo);
+			glBufferData(target, bufferView.byteLength,
+						&buffer.data.at(0) + bufferView.byteOffset, GL_STATIC_DRAW);
+			
+			vbos[i] = vbo;
+		}
+
+		// Each mesh can contain several primitives (or parts), each we need to 
+		// bind to an OpenGL vertex array object
+		for (size_t i = 0; i < mesh.primitives.size(); ++i) {
+
+			tinygltf::Primitive primitive = mesh.primitives[i];
+			tinygltf::Accessor indexAccessor = model.accessors[primitive.indices];
+
+			GLuint vao;
+			glGenVertexArrays(1, &vao);
+			glBindVertexArray(vao);
+
+			for (auto &attrib : primitive.attributes) {
+				tinygltf::Accessor accessor = model.accessors[attrib.second];
+				int byteStride =
+					accessor.ByteStride(model.bufferViews[accessor.bufferView]);
+				glBindBuffer(GL_ARRAY_BUFFER, vbos[accessor.bufferView]);
+
+				int size = 1;
+				if (accessor.type != TINYGLTF_TYPE_SCALAR) {
+					size = accessor.type;
+				}
+
+				int vaa = -1;
+				// Map strings to your specific attribute locations
+				if (attrib.first.compare("POSITION") == 0)   vaa = 0;
+				else if (attrib.first.compare("NORMAL") == 0)     vaa = 1;
+				else if (attrib.first.compare("TEXCOORD_0") == 0) vaa = 2;
+				// else if (attrib.first.compare("TEXCOORD_1") == 0) vaa = 4;
+				// else if (attrib.first.compare("TEXCOORD_2") == 0) vaa = 5;
+				// else if (attrib.first.compare("TEXCOORD_3") == 0) vaa = 6;
+				// else if (attrib.first.compare("TEXCOORD_4") == 0) vaa = 7;
+				else if (attrib.first.compare("JOINTS_0") == 0)   vaa = 3;
+				else if (attrib.first.compare("WEIGHTS_0") == 0)  vaa = 4;
+				else if (attrib.first.compare("TANGENT") == 0)    vaa = 5;
+				if (vaa > -1) {
+					glEnableVertexAttribArray(vaa);
+					// Use glVertexAttribIPointer for JOINTS (integers) to avoid casting to float
+					if (attrib.first.compare("JOINTS_0") == 0) {
+						glVertexAttribIPointer(vaa, size, accessor.componentType, 
+											byteStride, BUFFER_OFFSET(accessor.byteOffset));
+					} else {
+						glVertexAttribPointer(vaa, size, accessor.componentType,
+											accessor.normalized ? GL_TRUE : GL_FALSE,
+											byteStride, BUFFER_OFFSET(accessor.byteOffset));
+					}
+				} else {
+					std::cout << "vaa missing: " << attrib.first << std::endl;
+				}
+			}
+
+			// Record VAO for later use
+			PrimitiveObject primitiveObject;
+			primitiveObject.vao = vao;
+			primitiveObject.vbos = vbos;
+			primitiveObjects.push_back(primitiveObject);
+
+			glBindVertexArray(0);
+		}
+	}
+
+	void bindModelNodes(std::vector<PrimitiveObject> &primitiveObjects, 
+						tinygltf::Model &model,
+						tinygltf::Node &node) {
+		// Bind buffers for the current mesh at the node
+		if ((node.mesh >= 0) && (node.mesh < model.meshes.size())) {
+			bindMesh(primitiveObjects, model, model.meshes[node.mesh]);
+		}
+
+		// Recursive into children nodes
+		for (size_t i = 0; i < node.children.size(); i++) {
+			assert((node.children[i] >= 0) && (node.children[i] < model.nodes.size()));
+			bindModelNodes(primitiveObjects, model, model.nodes[node.children[i]]);
+		}
+	}
+
+	std::vector<PrimitiveObject> bindModel(tinygltf::Model &model) {
+		std::vector<PrimitiveObject> primitiveObjects;
+
+		const tinygltf::Scene &scene = model.scenes[model.defaultScene];
+		for (size_t i = 0; i < scene.nodes.size(); ++i) {
+			assert((scene.nodes[i] >= 0) && (scene.nodes[i] < model.nodes.size()));
+			bindModelNodes(primitiveObjects, model, model.nodes[scene.nodes[i]]);
+		}
+
+		return primitiveObjects;
+	}
+
+	// 1. Updated drawMesh: Added int &primitiveIdx
+	void drawMesh(const std::vector<PrimitiveObject> &primitiveObjects,
+				tinygltf::Model &model, tinygltf::Mesh &mesh, int &primitiveIdx) {
+		
+		for (size_t i = 0; i < mesh.primitives.size(); ++i) 
+		{
+			// Check bounds to be safe
+			if (primitiveIdx >= primitiveObjects.size()) {
+				std::cerr << "Error: primitiveIdx out of bounds!" << std::endl;
+				return;
+			}
+
+			// Access using the global index, then increment it
+			GLuint vao = primitiveObjects[primitiveIdx].vao;
+			std::map<int, GLuint> vbos = primitiveObjects[primitiveIdx].vbos;
+			primitiveIdx++; 
+
+			glBindVertexArray(vao);
+
+			tinygltf::Primitive primitive = mesh.primitives[i];
+			tinygltf::Accessor indexAccessor = model.accessors[primitive.indices];
+
+			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vbos.at(indexAccessor.bufferView));
+
+			glDrawElements(primitive.mode, indexAccessor.count,
+							indexAccessor.componentType,
+							BUFFER_OFFSET(indexAccessor.byteOffset));
+
+			glBindVertexArray(0);
+		}
+	}
+
+	void drawModelNodes(const std::vector<PrimitiveObject>& primitiveObjects,
+                    tinygltf::Model &model, tinygltf::Node &node, 
+                    int &primitiveIdx, 
+                    const glm::mat4& viewProjection, 
+                    const std::vector<glm::mat4>& globalTransforms) {
+    
+		if ((node.mesh >= 0) && (node.mesh < model.meshes.size())) {
+        
+			int nodeIndex = (int)(&node - &model.nodes[0]); 
+			glm::mat4 modelMatrix = globalTransforms[nodeIndex];
+			
+			// --- CRITICAL FIX: Handle Skinned vs Static Meshes ---
+			glm::mat4 finalModelMatrix;
+			
+			// If this node is skinned, the bones handle the position/scale.
+			// We must set the Model Matrix to Identity to prevent "Double Transforms".
+			if (node.skin >= 0) {
+				finalModelMatrix = glm::mat4(1.0f);
+			} else {
+				// Static objects (like the backpack or accessories) need their transform
+				finalModelMatrix = modelMatrix;
+			}
+
+			// Calculate MVP using the corrected matrix
+			glm::mat4 mvp = viewProjection * finalModelMatrix;
+
+			// Send to Shader
+			glUniformMatrix4fv(mvpMatrixID, 1, GL_FALSE, &mvp[0][0]);
+			
+			// Also fix u_model (used for normals/lighting)
+			GLint u_modelLoc = glGetUniformLocation(programID, "u_model"); // (Move this to initialize() for performance!)
+			glUniformMatrix4fv(u_modelLoc, 1, GL_FALSE, &finalModelMatrix[0][0]);
+
+			drawMesh(primitiveObjects, model, model.meshes[node.mesh], primitiveIdx);
+		}
+
+		// 2. Recurse into children
+		for (size_t i = 0; i < node.children.size(); i++) {
+			drawModelNodes(primitiveObjects, model, model.nodes[node.children[i]], 
+						primitiveIdx, viewProjection, globalTransforms);
+		}
+	}
+
+	void render(glm::mat4 cameraMatrix) {
+		glUseProgram(programID);
+
+		// 1. Create a Global Model Matrix to scale/position the entire astronaut
+		glm::mat4 globalModelTransform = glm::mat4(1.0f);
+		globalModelTransform = glm::translate(globalModelTransform, glm::vec3(0.0f, -25.0f, -20.0f)); // Position him
+		globalModelTransform = glm::scale(globalModelTransform, glm::vec3(0.08f)); // Scale him down (e.g., 0.1x)
+
+		// 2. Combine with Camera
+		glm::mat4 scaledViewProjection = cameraMatrix * globalModelTransform;
+		
+		// 1. Upload Light Data
+		glUniform3fv(lightPositionID, 1, &lightPosition[0]);
+		glUniform3fv(lightIntensityID, 1, &lightIntensity[0]);
+
+		// 2. Upload ALL joint matrices for the first skin
+		if (!skinObjects.empty()) {
+			glUniformMatrix4fv(jointMatricesID, 
+							(GLsizei)skinObjects[0].jointMatrices.size(), 
+							GL_FALSE, 
+							&skinObjects[0].jointMatrices[0][0][0]);
+		}
+
+		// 3. Draw with Node Transforms
+		int primitiveIdx = 0;
+		const tinygltf::Scene &scene = model.scenes[model.defaultScene];
+		for (int rootNodeIdx : scene.nodes) {
+			drawModelNodes(primitiveObjects, model, model.nodes[rootNodeIdx], 
+						primitiveIdx, scaledViewProjection, m_globalTransforms);
+		}
+	}
+
+	void cleanup() {
+		glDeleteProgram(programID);
+	}
+}; 
+
 int main(void)
 {
 	// Initialise GLFW
@@ -918,8 +1598,9 @@ int main(void)
 	bust.initialize("../final/model/helios_vaporwave_bust/scene.gltf");
 	bust.rotation.x = -glm::radians(90.0f);
 	bust.scale = 0.8f;
-    // ---------------------------
-
+    
+	MyBot astronaut;
+	astronaut.initialize();
 	// Camera setup, set eye location 
     // eye_center.y = viewDistance * cos(viewPolar);
     // eye_center.x = viewDistance * cos(viewAzimuth);
@@ -982,6 +1663,12 @@ int main(void)
 		//update bust rotation
 		bust.update(deltaTime, 2.0f); // Rotate at 10 degrees per second
 
+		//astronaut skeletal animation update
+		if (playAnimation) {
+			time += deltaTime * playbackSpeed;
+			astronaut.update(time);
+		}
+
 		viewMatrix = glm::lookAt(eye_center, lookat, up);
 		glm::mat4 vp = projectionMatrix * viewMatrix;
 
@@ -1005,6 +1692,7 @@ int main(void)
 			pillar.render(true, vp, lightVp);
 		}
 		bust.render(true, vp, lightVp);
+		astronaut.render(lightVp);
 
 		// --- PASS 2: Render scene as normal using the generated depth/shadow map ---
 		glBindFramebuffer(GL_FRAMEBUFFER, hdrFBO);
@@ -1037,6 +1725,8 @@ int main(void)
 		}
 
 		bust.render(false, vp, lightVp);
+
+		astronaut.render(vp); //modify render function for shadow mapping later
 
 		//filter bright areas 
 		glBindFramebuffer(GL_FRAMEBUFFER, pingpongFBO[0]);
@@ -1118,6 +1808,7 @@ int main(void)
 		pillar.cleanup();
 	}
 	bust.cleanup();
+	astronaut.cleanup();
 	bloom.cleanup();
 
 	// Close OpenGL window and terminate GLFW
