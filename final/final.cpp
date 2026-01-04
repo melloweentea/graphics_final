@@ -484,6 +484,319 @@ struct Model {
 	}
 }; 
 
+// 3d Model specifically for the sun
+struct Sun {
+	// Shader variable IDs
+	GLuint mvpMatrixID;
+	GLuint modelShader;
+	GLuint depthShader;
+
+	tinygltf::Model model;
+
+	//for position and rotation in render function 
+	glm::vec3 position = glm::vec3(0.0f);
+    glm::vec3 rotation = glm::vec3(0.0f); // Euler angles
+    float scale = 1.0f;
+
+	//for animation
+	float rotationAngle = 0.0f;
+
+	// Each VAO corresponds to each mesh primitive in the GLTF model
+	struct PrimitiveObject {
+		GLuint vao;
+		std::map<int, GLuint> vbos;
+		GLuint textureID; // Add this to store the texture handle
+	};
+	std::vector<PrimitiveObject> primitiveObjects;
+
+	bool loadModel(tinygltf::Model &model, const char *filename) {
+		tinygltf::TinyGLTF loader;
+		std::string err;
+		std::string warn;
+
+		bool res = loader.LoadASCIIFromFile(&model, &err, &warn, filename);
+		if (!warn.empty()) {
+			std::cout << "WARN: " << warn << std::endl;
+		}
+
+		if (!err.empty()) {
+			std::cout << "ERR: " << err << std::endl;
+		}
+
+		if (!res)
+			std::cout << "Failed to load glTF: " << filename << std::endl;
+		else
+			std::cout << "Loaded glTF: " << filename << std::endl;
+
+		return res;
+	}
+
+	void initialize(const char* path) {
+		// Modify your path if needed
+
+		if (!loadModel(model, path)) {
+			return;
+		}
+
+		// Prepare buffers for rendering 
+		primitiveObjects = bindModel(model);
+
+		// Create and compile our GLSL program from the shaders
+		modelShader = LoadShadersFromFile("../final/sun.vert", "../final/sun.frag");
+		if (modelShader == 0)
+		{
+			std::cerr << "Failed to load shaders." << std::endl;
+		}
+
+		// Get a handle for GLSL variables
+		mvpMatrixID = glGetUniformLocation(modelShader, "MVP");
+	}
+
+	void bindMesh(std::vector<PrimitiveObject> &primitiveObjects,
+				tinygltf::Model &model, tinygltf::Mesh &mesh) {
+
+		std::map<int, GLuint> vbos;
+		for (size_t i = 0; i < model.bufferViews.size(); ++i) {
+			const tinygltf::BufferView &bufferView = model.bufferViews[i];
+
+			int target = bufferView.target;
+			
+			if (bufferView.target == 0) { 
+				continue;
+			}
+
+			const tinygltf::Buffer &buffer = model.buffers[bufferView.buffer];
+			GLuint vbo;
+			glGenBuffers(1, &vbo);
+			glBindBuffer(target, vbo);
+			glBufferData(target, bufferView.byteLength,
+						&buffer.data.at(0) + bufferView.byteOffset, GL_STATIC_DRAW);
+			
+			vbos[i] = vbo;
+		}
+
+		// Each mesh can contain several primitives (or parts), each we need to 
+		// bind to an OpenGL vertex array object
+		//std::cout << "Mesh primitives: " << mesh.primitives.size() << std::endl;
+		for (size_t i = 0; i < mesh.primitives.size(); ++i) {
+
+			tinygltf::Primitive primitive = mesh.primitives[i];
+			tinygltf::Accessor indexAccessor = model.accessors[primitive.indices];
+
+			PrimitiveObject primitiveObject;
+
+			GLuint vao;
+			glGenVertexArrays(1, &vao);
+			glBindVertexArray(vao);
+
+			for (auto &attrib : primitive.attributes) {
+				tinygltf::Accessor accessor = model.accessors[attrib.second];
+				int byteStride =
+					accessor.ByteStride(model.bufferViews[accessor.bufferView]);
+				glBindBuffer(GL_ARRAY_BUFFER, vbos[accessor.bufferView]);
+
+				int size = 1;
+				if (accessor.type != TINYGLTF_TYPE_SCALAR) {
+					size = accessor.type;
+				}
+
+				// TODO: Remember to set the vaa index according to 
+				// the buffer in the vertex shader. 
+				int vaa = -1;
+				std::cout << "Attrib: " << attrib.first << std::endl;
+				if (attrib.first.compare("POSITION") == 0) vaa = 0;
+				if (attrib.first.compare("TEXCOORD_0") == 0) vaa = 1;
+				
+				if (vaa > -1) {
+					glEnableVertexAttribArray(vaa);
+					glVertexAttribPointer(vaa, size, accessor.componentType,
+										accessor.normalized ? GL_TRUE : GL_FALSE,
+										byteStride, BUFFER_OFFSET(accessor.byteOffset));
+				} else {
+					std::cout << "vaa missing: " << attrib.first << std::endl;
+				}
+			}
+
+			// 1. Get the material index from the current primitive (assuming you are in a loop)
+			int matIndex = primitive.material; 
+
+			// Only proceed if the primitive actually has a material assigned
+			if (matIndex != -1) {
+				tinygltf::Material &material = model.materials[matIndex];
+				
+				// 2. Access the baseColorTexture index from the PBR properties
+				int texIndex = material.pbrMetallicRoughness.baseColorTexture.index;
+
+				// 3. Check if the texture exists
+				if (texIndex > -1) {
+					tinygltf::Texture &tex = model.textures[texIndex];
+
+					if (tex.source > -1) {
+						tinygltf::Image &image = model.images[tex.source];
+
+						GLuint texid;
+						glGenTextures(1, &texid);
+						glBindTexture(GL_TEXTURE_2D, texid);
+
+						primitiveObject.textureID = texid;
+
+						glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+						// 4. Use Sampler settings from the file instead of hardcoded REPEAT
+						if (tex.sampler != -1) {
+							tinygltf::Sampler &sampler = model.samplers[tex.sampler];
+							glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, sampler.minFilter != -1 ? sampler.minFilter : GL_LINEAR);
+							glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, sampler.magFilter != -1 ? sampler.magFilter : GL_LINEAR);
+							glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, sampler.wrapS);
+							glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, sampler.wrapT);
+						} else {
+							// Default fallback
+							glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+							glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+							glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+							glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+						}
+
+						GLenum format = GL_RGBA;
+						if (image.component == 1) format = GL_RED;
+						else if (image.component == 2) format = GL_RG;
+						else if (image.component == 3) format = GL_RGB;
+
+						GLenum type = GL_UNSIGNED_BYTE;
+						if (image.bits == 16) type = GL_UNSIGNED_SHORT;
+
+						// 5. Use GL_SRGB8_ALPHA8 for baseColor so colors aren't washed out
+						glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8, image.width, image.height, 0, format, type, &image.image.at(0));
+
+						glGenerateMipmap(GL_TEXTURE_2D);
+						// Re-enable mipmap filtering if you generated them
+						glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+					}
+				}
+			}
+
+			// Record VAO for later use
+			primitiveObject.vao = vao;
+			primitiveObject.vbos = vbos;
+			primitiveObjects.push_back(primitiveObject);
+
+			glBindVertexArray(0);
+		}
+	}
+
+	void bindModelNodes(std::vector<PrimitiveObject> &primitiveObjects, 
+						tinygltf::Model &model,
+						tinygltf::Node &node) {
+		// Bind buffers for the current mesh at the node
+		if ((node.mesh >= 0) && (node.mesh < model.meshes.size())) {
+			bindMesh(primitiveObjects, model, model.meshes[node.mesh]);
+		}
+
+		// Recursive into children nodes
+		for (size_t i = 0; i < node.children.size(); i++) {
+			assert((node.children[i] >= 0) && (node.children[i] < model.nodes.size()));
+			bindModelNodes(primitiveObjects, model, model.nodes[node.children[i]]);
+		}
+	}
+
+	std::vector<PrimitiveObject> bindModel(tinygltf::Model &model) {
+		std::vector<PrimitiveObject> primitiveObjects;
+
+		const tinygltf::Scene &scene = model.scenes[model.defaultScene];
+		for (size_t i = 0; i < scene.nodes.size(); ++i) {
+			assert((scene.nodes[i] >= 0) && (scene.nodes[i] < model.nodes.size()));
+			bindModelNodes(primitiveObjects, model, model.nodes[scene.nodes[i]]);
+		}
+
+		return primitiveObjects;
+	}
+
+	void drawMesh(const std::vector<PrimitiveObject> &primitiveObjects,
+				tinygltf::Model &model, tinygltf::Mesh &mesh) {
+		
+		for (size_t i = 0; i < mesh.primitives.size(); ++i) 
+		{
+			GLuint vao = primitiveObjects[i].vao;
+			std::map<int, GLuint> vbos = primitiveObjects[i].vbos;
+
+			glBindVertexArray(vao);
+
+			tinygltf::Primitive primitive = mesh.primitives[i];
+			tinygltf::Accessor indexAccessor = model.accessors[primitive.indices];
+
+			glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, vbos.at(indexAccessor.bufferView));
+
+			// NEW: Bind the model's texture
+			glActiveTexture(GL_TEXTURE0); 
+			glBindTexture(GL_TEXTURE_2D, primitiveObjects[i].textureID);
+			// Ensure your model shader's sampler is pointed to unit 0
+			glUniform1i(glGetUniformLocation(modelShader, "u_BaseColorTexture"), 0);
+
+			glDrawElements(primitive.mode, indexAccessor.count,
+						indexAccessor.componentType,
+						BUFFER_OFFSET(indexAccessor.byteOffset));
+
+			glBindVertexArray(0);
+		}
+	}
+
+	void drawModel(const std::vector<PrimitiveObject>& primitiveObjects, tinygltf::Model &model) {
+		const tinygltf::Scene &scene = model.scenes[model.defaultScene];
+		for (size_t i = 0; i < scene.nodes.size(); ++i) {
+			drawModelNodes(primitiveObjects, model, model.nodes[scene.nodes[i]]);
+		}
+	}
+
+	// Update drawModelNodes to pass the primitiveCounter through
+	void drawModelNodes(const std::vector<PrimitiveObject>& primitiveObjects,
+						tinygltf::Model &model, tinygltf::Node &node) {
+		if ((node.mesh >= 0) && (node.mesh < model.meshes.size())) {
+			drawMesh(primitiveObjects, model, model.meshes[node.mesh]);
+		}
+		for (size_t i = 0; i < node.children.size(); i++) {
+			drawModelNodes(primitiveObjects, model, model.nodes[node.children[i]]);
+		}
+	}
+
+	void update(float deltaTime, float spinSpeed) {
+		// 1. Update the dedicated animation variable
+		rotationAngle += spinSpeed * deltaTime;
+
+		// 2. Wrap the angle to stay within 0-360 range (optional but good practice)
+		if (rotationAngle > 360.0f) rotationAngle -= 360.0f;
+
+		// 3. Update the rotation Y value that the render function uses
+		rotation.z = rotationAngle; 
+	}
+
+	void render(glm::mat4 viewMatrix, glm::mat4 projectionMatrix) {
+		// 1. Select the correct shader program
+		GLuint activeProgram = modelShader;
+		glUseProgram(activeProgram);
+
+		// 2. Calculate Model Matrix (Common to both passes)
+		glm::mat4 modelMat = glm::mat4(1.0f);
+		modelMat = glm::translate(modelMat, position);
+		modelMat = glm::rotate(modelMat, rotation.x, glm::vec3(1, 0, 0));
+		modelMat = glm::rotate(modelMat, rotation.y, glm::vec3(0, 1, 0));
+		modelMat = glm::rotate(modelMat, rotation.z, glm::vec3(0, 0, 1));
+		modelMat = glm::scale(modelMat, glm::vec3(scale));
+
+		glm::mat4 viewRotationOnly = glm::mat4(glm::mat3(viewMatrix));
+
+		glm::mat4 mvp = projectionMatrix * viewRotationOnly * modelMat;
+		glUniformMatrix4fv(glGetUniformLocation(activeProgram, "MVP"), 1, GL_FALSE, &mvp[0][0]);
+
+		// 4. Draw the actual geometry
+		drawModel(primitiveObjects, model);
+	}
+
+	void cleanup() {
+		glDeleteProgram(modelShader);
+		glDeleteProgram(depthShader);
+	}
+}; 
+
 // floor grid 
 struct Floor {
     glm::vec3 position;
@@ -1544,7 +1857,7 @@ int main(void)
 	Background background;
 	background.init();
 
-	Model sun;
+	Sun sun;
 	sun.initialize("../final/model/sun/sun.gltf"); 
 	sun.scale = 10.0f;
 	sun.position.z = -100.0f;
@@ -1709,7 +2022,9 @@ int main(void)
 		background.draw(glm::vec3(0.557f, 0.388f, 0.831f), glm::vec3(0.969f, 0.329f, 0.714f));
 
 		//render models and floor
-		sun.render(false, vp, lightVp);
+		glDepthFunc(GL_LEQUAL); // Change depth function for skybox/ background
+		sun.render(viewMatrix, projectionMatrix);
+		glDepthFunc(GL_LESS); // Set it back to default
 
 		glDisable(GL_CULL_FACE);
 		floor.render(vp, lightVp, glm::vec3(10.0f, 0.0f, 10.0f), glm::vec3(0.145f, 0.086f, 0.169f), 30.0f);
