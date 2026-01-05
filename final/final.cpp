@@ -2022,6 +2022,7 @@ int main(void)
 			else if (relativeZ < -worldSizeZ / 2.0f) {
 				palm.position.z += worldSizeZ; // Teleport to the far back
 			}
+			palm.render(true, vp, lightVp);
 		}
 
 		float spacing = 50.0f;
@@ -2037,6 +2038,7 @@ int main(void)
 			else if (pillar.position.z - eye_center.z < -viewDistance) {
 				pillar.position.z += (totalPillars * spacing);
 			}
+			pillar.render(true, vp, lightVp);
 		}
 
 		bust.render(true, vp, lightVp);
