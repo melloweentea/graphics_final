@@ -887,11 +887,9 @@ struct Floor {
 		glBindVertexArray(0); // Unbind VAO to stay clean
     }
 
-    void render(glm::mat4 cameraMatrix, glm::mat4 lightSpaceMatrix, glm::vec3 gColor, glm::vec3 fColor, float gScale) {
+    void render(glm::mat4 cameraMatrix, glm::mat4 lightSpaceMatrix, glm::vec3 playerPosition, glm::vec3 gColor, glm::vec3 fColor, float gScale) {
 		glUseProgram(programID);
 		glBindVertexArray(vertexArrayID);
-
-		// ... (Your Vertex/Color/UV Attribute setup stays the same) ...
 
 		// 4. Transform Matrices
 		glm::mat4 modelMatrix = glm::mat4(1.0f);
@@ -901,11 +899,10 @@ struct Floor {
 		// Calculate MVP for the player camera
 		glm::mat4 mvp = cameraMatrix * modelMatrix;
 		
-		// SEND ALL THREE to the shader
 		glUniformMatrix4fv(mvpMatrixID, 1, GL_FALSE, &mvp[0][0]);
-		// You'll need to get these IDs once during setup:
 		glUniformMatrix4fv(glGetUniformLocation(programID, "model"), 1, GL_FALSE, &modelMatrix[0][0]);
 		glUniformMatrix4fv(glGetUniformLocation(programID, "lightSpaceMatrix"), 1, GL_FALSE, &lightSpaceMatrix[0][0]);
+		glUniform3fv(glGetUniformLocation(programID, "playerPos"), 1, &playerPosition[0]);
 
 		// 5. Update Grid Colors and Scale
 		glUniform3fv(gridColorID, 1, &gColor[0]);
@@ -1984,6 +1981,10 @@ int main(void)
 			astronaut.update(time);
 		}
 
+		//move floor with player
+		floor.position.x = eye_center.x;
+		floor.position.z = eye_center.z;
+
 		viewMatrix = glm::lookAt(eye_center, lookat, up);
 		glm::mat4 vp = projectionMatrix * viewMatrix;
 
@@ -2030,7 +2031,7 @@ int main(void)
 		glDepthFunc(GL_LESS); // Set it back to default
 
 		glDisable(GL_CULL_FACE);
-		floor.render(vp, lightVp, glm::vec3(10.0f, 0.0f, 10.0f), glm::vec3(0.145f, 0.086f, 0.169f), 30.0f);
+		floor.render(vp, lightVp, eye_center, glm::vec3(10.0f, 0.0f, 10.0f), glm::vec3(0.145f, 0.086f, 0.169f), 30.0f);
 		// floor.render(vp, glm::vec3(10.0f, 0.0f, 10.0f), glm::vec3(0.0f, 0.0f, 0.0f), 30.0f);
 		glEnable(GL_CULL_FACE);
 

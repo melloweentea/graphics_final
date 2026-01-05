@@ -7,6 +7,7 @@ layout (location = 2) in vec2 aUV;
 uniform mat4 MVP;              // cameraMatrix * modelMatrix
 uniform mat4 model;            // Just the modelMatrix
 uniform mat4 lightSpaceMatrix; // The Sun's View-Projection
+uniform vec3 playerPos;       // Player position for effects
 
 out vec2 UV;
 out vec3 vertexColor;
@@ -24,6 +25,6 @@ void main() {
     // Position from the Sun's perspective
     FragPosLightSpace = lightSpaceMatrix * worldPos;
 
-    UV = aUV;
+    UV = aUV + vec2(playerPos.z, playerPos.x) * 0.1;
     vertexColor = aColor; 
 }
