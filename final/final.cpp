@@ -1860,24 +1860,25 @@ int main(void)
 	sun.position.z = -100.0f;
 
 	Floor floor; 
-	floor.initialize(glm::vec3(0, -25, 0), glm::vec3(300, 1, 300));
+	floor.initialize(glm::vec3(0, -25, 0), glm::vec3(500, 1, 500));
 
 	// Initialize random engine
 	std::random_device rd;
 	std::mt19937 gen(rd());
 
 	// Define world bounds for now (e.g., -100 to 100)
-	std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
+	std::uniform_real_distribution<float> dist(-200.0f, 200.0f);
 
 	std::vector<Model> palms;
+	Model palmTemplate;
+	palmTemplate.initialize("../final/model/palm_tree/palm_tree.gltf"); 
 	for (int i = 0; i < 30; i++) {
 		float xPos, zPos;
-		Model palm; 
-		palm.initialize("../final/model/palm_tree/palm_tree.gltf");
+		Model palm = palmTemplate;
 		palm.position.y = -25.0f;
 		palm.scale = 2.0f;
 		// Logic for X (Excluding -30 to 30)
-		do { xPos = dist(gen); } while (xPos > -30.0f && xPos < 30.0f);
+		do { xPos = dist(gen); } while (xPos > -35.0f && xPos < 35.0f);
 		palm.position.x = xPos;
 
 		// Z can be completely random
@@ -1888,15 +1889,22 @@ int main(void)
 	}
 	
 	std::vector<Model> pillars;
-	for(int i = 0; i < 5; i++) {
-		Model pillarLeft;
-		pillarLeft.initialize("../final/model/marble_pillar/scene.gltf");
+	Model pillarTemplate;
+	pillarTemplate.initialize("../final/model/marble_pillar/scene.gltf");
+	// Loop from -5 to 9 (Total of 15 iterations)
+	for(int i = -5; i < 10; i++) {
+		Model pillarLeft = pillarTemplate;
 		pillarLeft.rotation.x = glm::radians(90.0f);
 		pillarLeft.scale = 0.5f;
 		pillarLeft.position.y = -25.0f;
+
+		// When i is negative, -(-i) becomes positive Z
+		// i = -5 -> z = 250
+		// i = 0  -> z = 0
+		// i = 9  -> z = -450
 		pillarLeft.position.z = -(float)i * 50.0f; 
 		
-		pillarLeft.position.x = -30.0f; // Left side
+		pillarLeft.position.x = -30.0f;
 		pillars.push_back(pillarLeft);
 
 		Model pillarRight = pillarLeft; 
@@ -2002,12 +2010,35 @@ int main(void)
 		glEnable(GL_CULL_FACE);
 		glCullFace(GL_FRONT);
 		
-		for(auto& palm : palms) {
-			palm.render(true, vp, lightVp);
+		float worldSizeZ = 400.0f; // The total Z-range of your palm distribution
+
+		for (auto& palm : palms) {
+			// Calculate relative distance
+			float relativeZ = palm.position.z - eye_center.z;
+
+			if (relativeZ > worldSizeZ / 2.0f) {
+				palm.position.z -= worldSizeZ; // Teleport to the far front
+			} 
+			else if (relativeZ < -worldSizeZ / 2.0f) {
+				palm.position.z += worldSizeZ; // Teleport to the far back
+			}
 		}
-		for(auto& pillar : pillars) {
-			pillar.render(true, vp, lightVp);
+
+		float spacing = 50.0f;
+		float totalPillars = pillars.size() / 2; // Number of pairs
+		float viewDistance = 500.0f; // Distance after which a pillar teleports
+
+		for (auto& pillar : pillars) {
+			// If the pillar is too far behind the camera
+			if (pillar.position.z - eye_center.z > 250.0f) {
+				pillar.position.z -= (totalPillars * spacing);
+			}
+			// If the player moves backward and the pillar is too far ahead
+			else if (pillar.position.z - eye_center.z < -viewDistance) {
+				pillar.position.z += (totalPillars * spacing);
+			}
 		}
+
 		bust.render(true, vp, lightVp);
 		astronaut.render(lightVp);
 
