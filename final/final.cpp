@@ -1951,6 +1951,8 @@ int main(void)
 	glm::mat4 lightView, lightProjection;
 	// lightProjection = glm::perspective(glm::radians(depthFoV), (float)shadowMapWidth / shadowMapHeight, depthNear, depthFar);
 	lightProjection = glm::ortho(-100.0f, 100.0f, -100.0f, 100.0f, zNear, zFar);
+	glm::vec3 sunDirection = glm::normalize(glm::vec3(0.0f, -0.05f, 0.09f));
+	float distance = 150.0f;
 
 	initializeFBO(shadowMapWidth, shadowMapHeight);
 
@@ -1986,7 +1988,8 @@ int main(void)
 		glm::mat4 vp = projectionMatrix * viewMatrix;
 
 		//light view matrix
-		lightView = glm::lookAt(lightPosition, lightLookAt, lightUp);
+		lightPosition = eye_center - (sunDirection * distance);
+		lightView = glm::lookAt(lightPosition, eye_center, lightUp);
 		glm::mat4 lightVp = lightProjection * lightView;
 
 		// --- PASS 1: Render depth of scene to texture (from light's perspective) ---
